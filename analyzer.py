@@ -9,7 +9,6 @@ import tempfile
 from dataclasses import dataclass, asdict
 from typing import Any, Dict, List, Optional, Tuple
 
-from google import genai
 
 
 @dataclass
@@ -176,7 +175,7 @@ def _parse_python_traceback(stderr: str) -> Dict[str, Any]:
             exc_message = parts[1].strip()
             break
 
-    help_data = _python_error_help(exc_type or "", exc_message)
+    help_data = _python_error_help(str(exc_type) if exc_type else "", exc_message)
     help_data["line"] = line_number
     return help_data
 
@@ -289,7 +288,7 @@ def _parse_node_error(stderr: str) -> Dict[str, Any]:
             except ValueError:
                 pass
 
-    help_data = _javascript_error_help(error_name or "", message)
+    help_data = _javascript_error_help(str(error_name) if error_name else "", message)
     help_data["line"] = line_number
     return help_data
 
@@ -465,7 +464,7 @@ def _parse_java_runtime_error(stderr: str) -> Dict[str, Any]:
         "Add print statements or use a debugger to inspect variables before the crash.",
     ]
 
-    if exc_type and "NullPointerException" in exc_type:
+    if exc_type is not None and "NullPointerException" in str(exc_type):
         explanation = "You are trying to use an object reference that is null."
         suggestions = [
             "Ensure the object is initialized before you call methods or access fields on it.",
@@ -763,7 +762,7 @@ def _get_ai_mentorship(code: str, language: str, execution: dict, issues: List[d
         return ""
 
     try:
-        from google import genai
+        from google import genai  # type: ignore
         client = genai.Client(api_key=api_key)
         
         error_context = ""
@@ -841,7 +840,10 @@ def analyze_code(code: str, language: str = "python") -> Dict[str, Any]:
     else:
         issues, execution = _analyze_language_not_yet_supported(language)
 
-    issues_dicts = [asdict(issue) for issue in issues]
+    issues_dicts = [
+        {"line": i.line, "severity": i.severity, "code": i.code, "message": i.message}
+        for i in issues
+    ]
 
     error_details = execution.get("error")
     errors_from_issues = [i for i in issues_dicts if i["severity"] == "error"]
