@@ -762,50 +762,52 @@ def _get_ai_mentorship(code: str, language: str, execution: dict, issues: List[d
         return ""
 
     try:
-        from google import genai  # type: ignore
-        client = genai.Client(api_key=api_key)
+        import google.generativeai as genai
+        genai.configure(api_key=api_key)
+        client = genai.GenerativeModel("gemini-2.5-flash")
         
+        # Build comprehensive error context including all issues and execution errors
         error_context = ""
+        all_errors = []
+        
+        # Collect static issues (compilation, syntax errors, etc.)
+        static_errors = [i for i in issues if i.get('severity') == 'error']
+        for iss in static_errors:
+            all_errors.append({
+                'line': iss.get('line'),
+                'type': iss.get('code', 'ERROR'),
+                'message': iss.get('message'),
+                'severity': 'error'
+            })
+            error_context += f"Line {iss.get('line')}: {iss.get('message')}\n"
+        
+        # Add execution/runtime errors
         if execution.get('error'):
-            error_context += f"Execution Error Type: {execution['error'].get('type')}\n"
-            error_context += f"Message: {execution['error'].get('message')}\n"
-        if execution.get('stderr'):
-            error_context += f"Standard Error (stderr):\n{execution['stderr']}\n"
-        if execution.get('stdout'):
-            error_context += f"Standard Output (stdout):\n{execution['stdout']}\n"
-            
-        static_issues = [i for i in issues if i.get('severity') == 'error']
-        if static_issues:
-            error_context += "Compile Issues detected:\n"
-            for iss in static_issues:
-                error_context += f"- Line {iss.get('line')}: {iss.get('message')}\n"
-
-        prompt = f"""
-You are an expert, encouraging programming mentor.
-The student wrote some {language.upper()} code.
-
-Student's code:
-```
-{code}
-```
-
-Feedback Context:
-{error_context}
-
-Analyze the code and the context.
-1. If there is a compilation error, syntax error, or runtime error (check the Feedback Context for stderr or Compile Issues):
-   - In ONE short sentence, explain simply what went wrong.
-   - Provide a SINGLE bullet-point hint on how to fix it themselves (point to the line number if possible). DO NOT write the corrected code.
-2. If there are NO execution errors, carefully read the code's comments to understand the intended logic. Check if the logic is flawed or the stdout gives the wrong result based on the user's intent.
-   - If there is a logical error, explain the flaw in ONE short sentence, and provide ONE bullet-point hint.
-3. If the code is perfectly correct and has no errors or logic flaws, simply output exactly "LOOKS_GOOD"
-Keep it extremely brief and simple. Format using Markdown.
-"""
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt
-        )
-        return response.text
+            exec_error = execution['error']
+            error_line = exec_error.get('line', '?')
+            all_errors.append({
+                'line': error_line,
+                'type': exec_error.get('type', 'RuntimeError'),
+                'message': exec_error.get('message', ''),
+                'explanation': exec_error.get('explanation', ''),
+                'severity': 'error'
+            })
+            error_context += f"Line {error_line}: {exec_error.get('type')} - {exec_error.get('message')}\n"
+        
+        # If no errors, check for warnings
+        if not all_errors:
+            warnings = [i for i in issues if i.get('severity') == 'warning']
+            for warn in warnings:
+                error_context += f"Line {warn.get('line')}: {warn.get('message')}\n"
+        
+        # If there are any issues/errors, generate AI feedback
+        if all_errors or error_context:
+            prompt = f"""Errors found: {error_context}Code: {code[:500]}For each error, explain in ONE plain sentence and ONE fix hint with line numbers. Be VERY BRIEF. No jargon."""
+            response = client.generate_content(contents=prompt)
+            return response.text
+        else:
+            # No errors found
+            return "LOOKS_GOOD"
     except Exception as e:
         err_msg = str(e)
         print(f"Error calling Gemini AI: {err_msg}", file=sys.stderr)

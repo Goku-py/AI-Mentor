@@ -72,67 +72,21 @@ body {
   align-items: center;
 }
 
-/* Language Selector Styles */
-.language-selector-wrapper {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 0.5rem;
-}
-
 .language-select {
-  appearance: none;
-  -webkit-appearance: none;
-  -moz-appearance: none;
-  padding: 0.5rem 1rem;
   background-color: var(--bg-color);
-  background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="%238b949e" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>');
-  background-repeat: no-repeat;
-  background-position: right 0.5rem center;
-  background-size: 1.2em 1.2em;
-  border: 1px solid var(--border-color);
-  border-radius: 6px;
   color: var(--text-primary);
-  cursor: pointer;
+  border: 1px solid var(--border-color);
+  padding: 0.5rem 1rem;
+  border-radius: 6px;
   font-family: var(--font-sans);
   font-size: 0.9rem;
-  padding-right: 2.5rem;
-  transition: border-color 0.2s;
-  min-width: 150px;
-}
-
-.language-select:hover {
-  border-color: var(--primary-accent);
-}
-
-.language-select:focus {
   outline: none;
-  border-color: var(--primary-accent);
-}
-
-.language-select option {
-  background-color: var(--panel-bg);
-  color: var(--text-primary);
-  padding: 0.5rem 1rem;
-}
-
-.light-mode .language-select {
-  background-image: url('data:image/svg+xml;utf8,<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" fill="none" stroke="%2357606a" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><polyline points="6 9 12 15 18 9"></polyline></svg>');
-}
-
-.light-mode .language-select option {
-  background-color: #ffffff;
-  color: #24292e;
-}
-
-.language-select-display {
-  display: none;
 }
 
 .run-btn {
   background-color: var(--success);
   color: #fff;
-  border: none;
+  border: 1px solid rgba(240, 246, 252, 0.1);
   padding: 0.5rem 1rem;
   border-radius: 6px;
   font-weight: 600;
@@ -140,7 +94,7 @@ body {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  transition: background-color 0.2s ease;
+  transition: all 0.2s;
   font-family: var(--font-sans);
 }
 
@@ -160,21 +114,6 @@ body {
 
 .light-mode .run-btn:hover:not(:disabled) {
   background-color: #2ea043;
-}
-
-.font-btn {
-  background: none;
-  border: none;
-  color: var(--text-primary);
-  cursor: pointer;
-  font-size: 0.95rem;
-  font-weight: 600;
-  padding: 0.25rem 0.5rem;
-  transition: color 0.2s;
-}
-
-.font-btn:hover {
-  color: var(--primary-accent);
 }
 
 .main-content {
@@ -337,6 +276,22 @@ body {
 .accent-text {
   color: var(--primary-accent);
 }
+
+/* language select icons */
+.language-select {
+  background-repeat: no-repeat;
+  background-position: 0.5rem center;
+  padding-left: 2.5rem;
+}
+.language-select option {
+  padding-left: 1.5rem;
+}
+/* using tiny inline svg for each language logo */
+.language-select option.python { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath d='M12 2C6.477 2 2 6.477 2 12s4.477 10 10 10c5.523-0.001 10-4.478 10-10S17.523 2 12 2zm0 18c-4.411 0-8-3.589-8-8 0-1.436.366-2.789 1.006-3.96l5.954 5.954V14h2v4h2v-1.406l1.406 1.406C14.789 19.634 13.436 20 12 20z' fill='%233776a1'/%3E%3C/svg%3E"); }
+.language-select option.javascript { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23f7df1e' d='M1.5 1.5h21v21h-21z'/%3E%3Ctext x='12' y='18' font-size='14' font-family='Arial' fill='%23000' text-anchor='middle'%3EJS%3C/text%3E%3C/svg%3E"); }
+.language-select option.java { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Cpath fill='%23d44401' d='M12 2s-5 2-5 6c0 2 2 4 5 4s5-2 5-4c0-4-5-6-5-6z'/%3E%3Cpath fill='%23d44401' d='M6 18v2h12v-2s-3 1-6 1-6-1-6-1z'/%3E%3C/svg%3E"); }
+.language-select option.c { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ctext x='12' y='17' font-size='16' font-family='Courier' fill='%23007acc' text-anchor='middle'%3EC%3C/text%3E%3C/svg%3E"); }
+.language-select option.cpp { background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 24 24'%3E%3Ctext x='12' y='17' font-size='16' font-family='Courier' fill='%231288be' text-anchor='middle'%3EC++%3C/text%3E%3C/svg%3E"); }
 
 /* header toolbar button styling */
 .header .controls > button {
