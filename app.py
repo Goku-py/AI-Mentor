@@ -1,9 +1,14 @@
+import os
 from flask import Flask, render_template, jsonify, request
+from flask_cors import CORS
+from dotenv import load_dotenv
 
 from analyzer import analyze_code
 
+load_dotenv()
 
 app = Flask(__name__)
+CORS(app)
 
 
 @app.route("/")

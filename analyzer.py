@@ -1,12 +1,15 @@
 from __future__ import annotations
 
 import ast
+import os
 import re
 import subprocess
 import sys
 import tempfile
 from dataclasses import dataclass, asdict
 from typing import Any, Dict, List, Optional, Tuple
+
+from google import genai
 
 
 @dataclass
@@ -372,6 +375,362 @@ def _analyze_javascript(code: str) -> Tuple[List[Issue], Dict[str, Any]]:
     return issues, execution
 
 
+def _parse_gcc_output(output: str, language_label: str) -> List[Issue]:
+    """
+    Parse GCC / G++ style diagnostics into Issue objects.
+    Example line: main.c:10:5: error: expected ';' before 'return'
+    """
+    issues: List[Issue] = []
+    if not output:
+        return issues
+
+    pattern = re.compile(r"^(.*?):(\d+):\d*:\s*(warning|error):\s*(.*)$")
+    for line in output.splitlines():
+        match = pattern.match(line.strip())
+        if not match:
+            continue
+        _file, line_str, level, msg = match.groups()
+        try:
+            line_no = int(line_str)
+        except ValueError:
+            line_no = 1
+        severity = "warning" if level == "warning" else "error"
+        code = f"{language_label.upper()}_{level.upper()}"
+        issues.append(Issue(line=line_no, severity=severity, code=code, message=msg.strip()))
+    return issues
+
+
+def _parse_java_compile_output(output: str) -> List[Issue]:
+    """
+    Parse javac diagnostics like:
+      Main.java:10: error: ';' expected
+    """
+    issues: List[Issue] = []
+    if not output:
+        return issues
+
+    pattern = re.compile(r"^(.*?):(\d+):\s*(warning|error):\s*(.*)$")
+    for line in output.splitlines():
+        match = pattern.match(line.strip())
+        if not match:
+            continue
+        _file, line_str, level, msg = match.groups()
+        try:
+            line_no = int(line_str)
+        except ValueError:
+            line_no = 1
+        severity = "warning" if level == "warning" else "error"
+        code = f"JAVA_{level.upper()}"
+        issues.append(Issue(line=line_no, severity=severity, code=code, message=msg.strip()))
+    return issues
+
+
+def _parse_java_runtime_error(stderr: str) -> Dict[str, Any]:
+    """
+    Best-effort extraction of Java runtime exception information.
+    """
+    if not stderr:
+        return {"type": None, "message": "", "line": None, "explanation": "", "suggestions": []}
+
+    lines = stderr.strip().splitlines()
+    exc_type: Optional[str] = None
+    message = ""
+    line_number: Optional[int] = None
+
+    # Look for line with "...Exception: message"
+    for line in lines:
+        if "Exception" in line and ":" in line:
+            # e.g., Exception in thread "main" java.lang.NullPointerException: msg
+            parts = line.split("Exception", 1)
+            tail = "Exception" + parts[1]
+            type_and_message = tail.split(":", 1)
+            exc_type = type_and_message[0].strip()
+            message = type_and_message[1].strip() if len(type_and_message) > 1 else ""
+            break
+
+    # Look for "(Main.java:line)"
+    loc_pattern = re.compile(r"\((?:.*\.java):(\d+)\)")
+    for line in lines:
+        m = loc_pattern.search(line)
+        if m:
+            try:
+                line_number = int(m.group(1))
+                break
+            except ValueError:
+                pass
+
+    explanation = "Your Java program threw a runtime exception."
+    suggestions: List[str] = [
+        "Check the line mentioned in the stack trace to see what values are being used.",
+        "Add print statements or use a debugger to inspect variables before the crash.",
+    ]
+
+    if exc_type and "NullPointerException" in exc_type:
+        explanation = "You are trying to use an object reference that is null."
+        suggestions = [
+            "Ensure the object is initialized before you call methods or access fields on it.",
+            "Check for null and handle it explicitly before using the variable.",
+        ]
+
+    return {
+        "type": exc_type,
+        "message": message,
+        "line": line_number,
+        "explanation": explanation,
+        "suggestions": suggestions,
+    }
+
+
+def _run_gcc(source_code: str, language_label: str, compiler: str, source_name: str, timeout: float = 3.0) -> Tuple[List[Issue], Dict[str, Any]]:
+    """
+    Compile and run C or C++ code using gcc/g++.
+    """
+    compile_issues: List[Issue] = []
+    execution = _empty_execution()
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        source_path = os.path.join(tmp_dir, source_name)
+        binary_path = os.path.join(tmp_dir, "program")
+
+        with open(source_path, "w", encoding="utf-8") as f:
+            f.write(source_code)
+
+        try:
+            compile_proc = subprocess.run(
+                [compiler, source_path, "-o", binary_path],
+                cwd=tmp_dir,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except FileNotFoundError:
+            execution["tool_missing"] = True
+            execution["error"] = {
+                "type": f"{compiler}_NotFound",
+                "message": f"Compiler '{compiler}' was not found on the server.",
+                "line": None,
+                "explanation": f"The server cannot compile {language_label.upper()} code because '{compiler}' is not installed or not on PATH.",
+                "suggestions": [
+                    f"Install {compiler} (for example via MSYS2/MinGW or TDM-GCC) and ensure it is on your PATH.",
+                    "After installing, restart the server and try again.",
+                ],
+            }
+            return compile_issues, execution
+        except subprocess.TimeoutExpired as exc:
+            execution["stdout"] = exc.stdout or ""
+            execution["stderr"] = exc.stderr or ""
+            execution["returncode"] = -1
+            execution["timed_out"] = True
+            execution["error"] = {
+                "type": "Timeout",
+                "message": "Compilation took too long and was stopped.",
+                "line": None,
+                "explanation": "The compiler did not finish within the allowed time limit.",
+                "suggestions": [
+                    "Check for extremely large source code or complex templates/macros.",
+                    "Try simplifying the program or compiling a smaller piece.",
+                ],
+            }
+            return compile_issues, execution
+
+        if compile_proc.returncode != 0:
+            execution["stderr"] = compile_proc.stderr or ""
+            execution["returncode"] = compile_proc.returncode
+            compile_issues.extend(_parse_gcc_output(compile_proc.stderr or "", language_label))
+            if not execution["error"]:
+                execution["error"] = {
+                    "type": "CompileError",
+                    "message": "Compilation failed. See errors below.",
+                    "line": None,
+                    "explanation": f"The {language_label.upper()} compiler reported one or more errors.",
+                    "suggestions": [
+                        "Read each compiler error from top to bottom; often the first message is the most important.",
+                        "Fix the earliest error, then recompile to see if later errors disappear.",
+                    ],
+                }
+            return compile_issues, execution
+
+        # Run the compiled program
+        try:
+            run_proc = subprocess.run(
+                [binary_path],
+                cwd=tmp_dir,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except subprocess.TimeoutExpired as exc:
+            execution["stdout"] = exc.stdout or ""
+            execution["stderr"] = exc.stderr or ""
+            execution["returncode"] = -1
+            execution["timed_out"] = True
+            execution["error"] = {
+                "type": "Timeout",
+                "message": "Program execution took too long and was stopped (possible infinite loop or heavy computation).",
+                "line": None,
+                "explanation": "The program did not finish within the allowed time limit.",
+                "suggestions": [
+                    "Check for infinite loops or very slow operations.",
+                    "Try running a smaller piece of the program or simplifying the logic.",
+                ],
+            }
+            return compile_issues, execution
+
+        execution["stdout"] = run_proc.stdout or ""
+        execution["stderr"] = run_proc.stderr or ""
+        execution["returncode"] = run_proc.returncode
+
+        if run_proc.returncode != 0 and not execution["error"]:
+            execution["error"] = {
+                "type": "RuntimeError",
+                "message": "The program exited with a non-zero status code.",
+                "line": None,
+                "explanation": "A non-zero exit code usually means the program hit a runtime error such as division by zero, invalid memory access, or an explicit `return 1`.",
+                "suggestions": [
+                    "Add print statements before the suspected failing line to see which values are being used.",
+                    "Check for invalid array indices, null pointers, or divisions where the denominator may be zero.",
+                ],
+            }
+
+    return compile_issues, execution
+
+
+def _analyze_c(code: str) -> Tuple[List[Issue], Dict[str, Any]]:
+    style_issues = _line_based_checks(code)
+    compile_issues, execution = _run_gcc(code, "c", "gcc", "main.c")
+    issues = style_issues + compile_issues
+    return issues, execution
+
+
+def _analyze_cpp(code: str) -> Tuple[List[Issue], Dict[str, Any]]:
+    style_issues = _line_based_checks(code)
+    compile_issues, execution = _run_gcc(code, "cpp", "g++", "main.cpp")
+    issues = style_issues + compile_issues
+    return issues, execution
+
+
+def _analyze_java(code: str, timeout: float = 3.0) -> Tuple[List[Issue], Dict[str, Any]]:
+    style_issues = _line_based_checks(code)
+    execution = _empty_execution()
+    compile_issues: List[Issue] = []
+
+    match = re.search(r'public\s+(?:final\s+)?class\s+(\w+)', code)
+    class_name = match.group(1) if match else "Main"
+
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        source_path = os.path.join(tmp_dir, f"{class_name}.java")
+        with open(source_path, "w", encoding="utf-8") as f:
+            f.write(code)
+
+        try:
+            compile_proc = subprocess.run(
+                ["javac", source_path],
+                cwd=tmp_dir,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except FileNotFoundError:
+            execution["tool_missing"] = True
+            execution["error"] = {
+                "type": "JavacNotFound",
+                "message": "Java compiler ('javac') was not found on the server.",
+                "line": None,
+                "explanation": "The server cannot compile Java code because the JDK tools are not installed or not on PATH.",
+                "suggestions": [
+                    "Install a JDK (for example Temurin or Oracle JDK) and ensure 'javac' is on your PATH.",
+                    "After installing, restart the server and try again.",
+                ],
+            }
+            return style_issues, execution
+        except subprocess.TimeoutExpired as exc:
+            execution["stdout"] = exc.stdout or ""
+            execution["stderr"] = exc.stderr or ""
+            execution["returncode"] = -1
+            execution["timed_out"] = True
+            execution["error"] = {
+                "type": "Timeout",
+                "message": "Java compilation took too long and was stopped.",
+                "line": None,
+                "explanation": "The Java compiler did not finish within the allowed time limit.",
+                "suggestions": [
+                    "Check for extremely large source files or complex generics.",
+                    "Try simplifying the program or compiling a smaller piece.",
+                ],
+            }
+            return style_issues, execution
+
+        if compile_proc.returncode != 0:
+            stderr = compile_proc.stderr or ""
+            execution["stderr"] = stderr
+            execution["returncode"] = compile_proc.returncode
+            compile_issues.extend(_parse_java_compile_output(stderr))
+            if not execution["error"]:
+                execution["error"] = {
+                    "type": "CompileError",
+                    "message": "Java compilation failed. See errors below.",
+                    "line": None,
+                    "explanation": "The Java compiler reported one or more errors.",
+                    "suggestions": [
+                        "Fix the first error reported by javac; later errors may be side effects.",
+                        "Ensure your public class name matches the file name (here: Main).",
+                    ],
+                }
+            issues = style_issues + compile_issues
+            return issues, execution
+
+        # If compilation succeeded, try to run the program.
+        try:
+            run_proc = subprocess.run(
+                ["java", class_name],
+                cwd=tmp_dir,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+            )
+        except FileNotFoundError:
+            execution["tool_missing"] = True
+            execution["error"] = {
+                "type": "JavaRuntimeNotFound",
+                "message": "Java runtime ('java') was not found on the server.",
+                "line": None,
+                "explanation": "The server cannot run Java programs because the Java runtime is not installed or not on PATH.",
+                "suggestions": [
+                    "Install a JDK/JRE and ensure the 'java' command is available.",
+                    "After installing, restart the server and try again.",
+                ],
+            }
+            issues = style_issues + compile_issues
+            return issues, execution
+        except subprocess.TimeoutExpired as exc:
+            execution["stdout"] = exc.stdout or ""
+            execution["stderr"] = exc.stderr or ""
+            execution["returncode"] = -1
+            execution["timed_out"] = True
+            execution["error"] = {
+                "type": "Timeout",
+                "message": "Java program execution took too long and was stopped (possible infinite loop or heavy computation).",
+                "line": None,
+                "explanation": "The program did not finish within the allowed time limit.",
+                "suggestions": [
+                    "Check for infinite loops or very slow operations.",
+                    "Try running a smaller piece of the program or simplifying the logic.",
+                ],
+            }
+            issues = style_issues + compile_issues
+            return issues, execution
+
+        execution["stdout"] = run_proc.stdout or ""
+        execution["stderr"] = run_proc.stderr or ""
+        execution["returncode"] = run_proc.returncode
+
+        if run_proc.returncode != 0:
+            execution["error"] = _parse_java_runtime_error(execution["stderr"])
+
+    issues = style_issues + compile_issues
+    return issues, execution
+
+
 def _analyze_language_not_yet_supported(language: str) -> Tuple[List[Issue], Dict[str, Any]]:
     issues: List[Issue] = [
         Issue(
@@ -398,6 +757,61 @@ def _analyze_language_not_yet_supported(language: str) -> Tuple[List[Issue], Dic
     return issues, execution
 
 
+def _get_ai_mentorship(code: str, language: str, execution: dict, issues: List[dict]) -> str:
+    api_key = os.environ.get("GEMINI_API_KEY")
+    if not api_key:
+        return ""
+
+    try:
+        from google import genai
+        client = genai.Client(api_key=api_key)
+        
+        error_context = ""
+        if execution.get('error'):
+            error_context += f"Execution Error Type: {execution['error'].get('type')}\n"
+            error_context += f"Message: {execution['error'].get('message')}\n"
+        if execution.get('stderr'):
+            error_context += f"Standard Error (stderr):\n{execution['stderr']}\n"
+        if execution.get('stdout'):
+            error_context += f"Standard Output (stdout):\n{execution['stdout']}\n"
+            
+        static_issues = [i for i in issues if i.get('severity') == 'error']
+        if static_issues:
+            error_context += "Compile Issues detected:\n"
+            for iss in static_issues:
+                error_context += f"- Line {iss.get('line')}: {iss.get('message')}\n"
+
+        prompt = f"""
+You are an expert, encouraging programming mentor.
+The student wrote some {language.upper()} code.
+
+Student's code:
+```
+{code}
+```
+
+Feedback Context:
+{error_context}
+
+Analyze the code and the context.
+1. If there is a compilation error, syntax error, or runtime error (check the Feedback Context for stderr or Compile Issues):
+   - In ONE short sentence, explain simply what went wrong.
+   - Provide a SINGLE bullet-point hint on how to fix it themselves (point to the line number if possible). DO NOT write the corrected code.
+2. If there are NO execution errors, carefully read the code's comments to understand the intended logic. Check if the logic is flawed or the stdout gives the wrong result based on the user's intent.
+   - If there is a logical error, explain the flaw in ONE short sentence, and provide ONE bullet-point hint.
+3. If the code is perfectly correct and has no errors or logic flaws, simply output exactly "LOOKS_GOOD"
+Keep it extremely brief and simple. Format using Markdown.
+"""
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt
+        )
+        return response.text
+    except Exception as e:
+        err_msg = str(e)
+        print(f"Error calling Gemini AI: {err_msg}", file=sys.stderr)
+        return f"**AI Mentor API Error:**\n\n```\n{err_msg}\n```\n\n*Make sure your API key is valid and not rate-limited.*"
+
 def analyze_code(code: str, language: str = "python") -> Dict[str, Any]:
     """
     Analyze source code and return a structured result.
@@ -417,10 +831,22 @@ def analyze_code(code: str, language: str = "python") -> Dict[str, Any]:
     elif language in {"javascript", "js"}:
         language = "javascript"
         issues, execution = _analyze_javascript(code)
+    elif language == "java":
+        issues, execution = _analyze_java(code)
+    elif language == "c":
+        issues, execution = _analyze_c(code)
+    elif language in {"cpp", "c++"}:
+        language = "cpp"
+        issues, execution = _analyze_cpp(code)
     else:
         issues, execution = _analyze_language_not_yet_supported(language)
 
     issues_dicts = [asdict(issue) for issue in issues]
+
+    error_details = execution.get("error")
+    errors_from_issues = [i for i in issues_dicts if i["severity"] == "error"]
+
+    ai_mentor_feedback = _get_ai_mentorship(code, language, execution, issues_dicts)
 
     result: Dict[str, Any] = {
         "ok": True,
@@ -431,6 +857,7 @@ def analyze_code(code: str, language: str = "python") -> Dict[str, Any]:
         },
         "issues": issues_dicts,
         "execution": execution,
+        "ai_mentor_feedback": ai_mentor_feedback,
     }
 
     return result

@@ -1,4 +1,4 @@
 Flask
-numpy
-pandas
-scikit-learn
+google-generativeai
+python-dotenv
+flask-cors
