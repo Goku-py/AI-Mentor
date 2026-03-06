@@ -31,8 +31,9 @@ RUN npx vite build
 # Remove devDependencies after build to keep image lean
 RUN npm prune --omit=dev
 
-# Expose the port (Railway/Render set PORT env var)
+# Expose a default port
 EXPOSE 5000
 
 # Use Gunicorn for production (not Flask dev server)
-CMD ["gunicorn", "--bind", "0.0.0.0:5000", "--workers", "2", "--timeout", "30", "app:app"]
+# The shell form of CMD allows evaluating the $PORT environment variable
+CMD gunicorn --bind 0.0.0.0:${PORT:-5000} --workers 2 --timeout 30 app:app

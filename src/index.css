@@ -146,8 +146,13 @@ body {
 
 .run-btn:hover:not(:disabled) {
   background-color: #2ea043;
-  color: #fff;
+  color: #fff !important;
   text-shadow: 0 0 2px rgba(0, 0, 0, 0.3);
+}
+
+.run-btn:focus-visible {
+  outline: 2px solid #58a6ff;
+  outline-offset: 2px;
 }
 
 .run-btn:disabled {
@@ -373,7 +378,7 @@ body {
 }
 
 /* header toolbar button styling */
-.header .controls > button {
+.header .controls>button:not(.run-btn) {
   background: none;
   border: none;
   color: var(--text-primary);
@@ -382,7 +387,8 @@ body {
   padding: 0.25rem;
   margin-right: 0.25rem;
 }
-.header .controls > button:hover {
+
+.header .controls>button:not(.run-btn):hover {
   color: var(--primary-accent);
 }
 
@@ -404,6 +410,7 @@ body {
 ::-webkit-scrollbar-thumb:hover {
   background: #484f58;
 }
+
 /* ===== COMPREHENSIVE LIGHT MODE OVERRIDES ===== */
 .light-mode {
   --bg-color: #f6f8fa;
