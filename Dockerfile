@@ -22,12 +22,14 @@ RUN pip install --no-cache-dir gunicorn
 # Copy application code
 COPY app.py analyzer.py ./
 
-# Build frontend (only needed if serving from Flask)
+# Build frontend
 COPY package.json package-lock.json ./
-RUN npm ci --production
+RUN npm ci
 COPY index.html vite.config.js ./
 COPY src/ src/
 RUN npx vite build
+# Remove devDependencies after build to keep image lean
+RUN npm prune --omit=dev
 
 # Expose the port (Railway/Render set PORT env var)
 EXPOSE 5000
