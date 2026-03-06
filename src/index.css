@@ -144,12 +144,6 @@ body {
   font-family: var(--font-sans);
 }
 
-.run-btn:hover:not(:disabled) {
-  background-color: #2ea043;
-  color: #fff !important;
-  text-shadow: 0 0 2px rgba(0, 0, 0, 0.3);
-}
-
 .run-btn:focus-visible {
   outline: 2px solid #58a6ff;
   outline-offset: 2px;
@@ -158,6 +152,13 @@ body {
 .run-btn:disabled {
   opacity: 0.6;
   cursor: not-allowed;
+}
+
+/* Dark mode specific styles for run button */
+.run-btn:hover:not(:disabled) {
+  background-color: #238636;
+  color: #ffffff !important;
+  text-shadow: none;
 }
 
 .light-mode .run-btn {
@@ -243,9 +244,10 @@ body {
   background-color: #0d1117;
   border-right: 1px solid var(--border-color);
   z-index: 10;
-  overflow: hidden;
   flex-shrink: 0;
   min-width: fit-content;
+  width: auto;
+  height: fit-content;
 }
 
 .light-mode .line-numbers {

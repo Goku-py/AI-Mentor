@@ -1,11 +1,15 @@
 from __future__ import annotations
 
 import ast
+import json
 import os
 import re
 import subprocess
 import sys
 import tempfile
+import urllib.error
+import urllib.parse
+import urllib.request
 from dataclasses import dataclass, asdict
 from typing import Any, Dict, List, Optional, Tuple
 
@@ -789,15 +793,64 @@ def _analyze_language_not_yet_supported(language: str) -> Tuple[List[Issue], Dic
     return issues, execution
 
 
+def _get_valid_gemini_api_key() -> Optional[str]:
+    """Read and validate GEMINI_API_KEY from environment."""
+    api_key = (os.environ.get("GEMINI_API_KEY") or "").strip()
+
+    # Guard against accidentally quoted values from environment providers.
+    if api_key.startswith('"') and api_key.endswith('"'):
+        api_key = api_key[1:-1].strip()
+
+    if not api_key or api_key == "YOUR_API_KEY_HERE":
+        return None
+
+    return api_key
+
+
+def _extract_gemini_text(response_json: Dict[str, Any]) -> Optional[str]:
+    """Extract model text from Gemini generateContent response."""
+    candidates = response_json.get("candidates")
+    if not isinstance(candidates, list):
+        return None
+
+    for candidate in candidates:
+        if not isinstance(candidate, dict):
+            continue
+        content = candidate.get("content")
+        if not isinstance(content, dict):
+            continue
+        parts = content.get("parts")
+        if not isinstance(parts, list):
+            continue
+        for part in parts:
+            if isinstance(part, dict) and isinstance(part.get("text"), str) and part["text"].strip():
+                return part["text"].strip()
+    return None
+
+
+def _map_gemini_http_error(status_code: int, body_text: str, error_message: str) -> str:
+    """Map Gemini API failures to stable app-level status codes."""
+    haystack = f"{error_message}\n{body_text}".lower()
+
+    if status_code == 403 and (
+        "api has not been used" in haystack
+        or "service disabled" in haystack
+        or "is disabled" in haystack
+    ):
+        return "AI_MENTOR_API_DISABLED"
+
+    if status_code == 429 or "quota" in haystack or "rate limit" in haystack:
+        return "AI_MENTOR_QUOTA_EXCEEDED"
+
+    return "AI_MENTOR_API_ERROR"
+
+
 def _get_ai_mentorship(code: str, language: str, execution: dict, issues: List[dict]) -> str:
-    api_key = os.environ.get("GEMINI_API_KEY")
+    api_key = _get_valid_gemini_api_key()
     if not api_key:
         return "AI_MENTOR_DISABLED"
 
     try:
-        from google import genai
-        client = genai.Client(api_key=api_key)
-        
         # Build comprehensive error context including all issues and execution errors
         error_context = ""
         all_errors = []
@@ -845,26 +898,88 @@ def _get_ai_mentorship(code: str, language: str, execution: dict, issues: List[d
                 f"2. Give ONE specific hint with the line number\n"
                 f"Never give the direct answer. Be VERY BRIEF (max 3 sentences total per error)."
             )
-            
+
+            endpoint = (
+                "https://generativelanguage.googleapis.com/v1beta/"
+                f"models/gemini-2.5-flash:generateContent?key={urllib.parse.quote_plus(api_key)}"
+            )
+            payload = {
+                "contents": [
+                    {
+                        "parts": [
+                            {
+                                "text": prompt,
+                            }
+                        ]
+                    }
+                ]
+            }
+            request_body = json.dumps(payload).encode("utf-8")
+            req = urllib.request.Request(
+                endpoint,
+                data=request_body,
+                headers={"Content-Type": "application/json"},
+                method="POST",
+            )
+
             try:
-                response = client.models.generate_content(
-                    model="gemini-2.5-flash",
-                    contents=prompt,
+                with urllib.request.urlopen(req, timeout=15) as response:
+                    status_code = response.getcode()
+                    raw_body = response.read().decode("utf-8", errors="replace")
+            except urllib.error.HTTPError as http_err:
+                status_code = http_err.code
+                raw_body = ""
+                try:
+                    raw_body = (http_err.read() or b"").decode("utf-8", errors="replace")
+                except Exception:
+                    raw_body = ""
+
+                error_message = ""
+                # Parse error JSON only after checking status code.
+                try:
+                    parsed_error = json.loads(raw_body) if raw_body else {}
+                    if isinstance(parsed_error, dict):
+                        error_obj = parsed_error.get("error")
+                        if isinstance(error_obj, dict):
+                            error_message = str(error_obj.get("message") or "")
+                except json.JSONDecodeError:
+                    error_message = ""
+
+                mapped_code = _map_gemini_http_error(status_code, raw_body, error_message)
+                print(
+                    f"[Gemini] HTTP {status_code}. mapped_code={mapped_code}. message={error_message}",
+                    file=sys.stderr,
                 )
-                return response.text if response.text else "LOOKS_GOOD"
-            except Exception as gemini_err:
-                # If Gemini fails, return a special code to indicate disabled
-                print(f"⚠️  Gemini API error: {str(gemini_err)}", file=sys.stderr)
+                return mapped_code
+            except urllib.error.URLError as url_err:
+                print(f"[Gemini] Network error: {url_err}", file=sys.stderr)
                 return "AI_MENTOR_API_ERROR"
+
+            if status_code < 200 or status_code >= 300:
+                print(f"[Gemini] Unexpected status: {status_code}", file=sys.stderr)
+                return "AI_MENTOR_API_ERROR"
+
+            try:
+                parsed = json.loads(raw_body)
+            except json.JSONDecodeError as decode_err:
+                preview = raw_body[:180].replace("\n", " ")
+                print(
+                    f"[Gemini] JSON decode failed on success response: {decode_err}. body_preview={preview}",
+                    file=sys.stderr,
+                )
+                return "AI_MENTOR_BAD_RESPONSE"
+
+            feedback_text = _extract_gemini_text(parsed)
+            if feedback_text:
+                return feedback_text
+
+            return "LOOKS_GOOD"
         else:
             # No errors found
             return "LOOKS_GOOD"
-    except ImportError:
-        print("⚠️  google.generativeai not installed", file=sys.stderr)
-        return "AI_MENTOR_DISABLED"
     except Exception as e:
         err_msg = str(e)
-        print(f"⚠️  Error with AI Mentor: {err_msg}", file=sys.stderr)
+        print(f"[Gemini] Error with AI Mentor: {err_msg}", file=sys.stderr)
         return "AI_MENTOR_DISABLED"
 
 def analyze_code(code: str, language: str = "python") -> Dict[str, Any]:

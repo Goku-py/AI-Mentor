@@ -10,7 +10,7 @@
     "dev": "vite",
     "build": "vite build",
     "preview": "vite preview",
-    "start": "concurrently \"python app.py\" \"npm run dev\"",
+    "start": "python app.py",
     "server": "python app.py",
     "client": "vite"
   },
