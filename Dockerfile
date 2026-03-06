@@ -1,5 +1,8 @@
 FROM python:3.11-slim
 
+# Suppress interactive prompts during apt-get install
+ENV DEBIAN_FRONTEND=noninteractive
+
 # Install system dependencies for code execution (subprocess)
 RUN apt-get update && apt-get install -y --no-install-recommends \
     nodejs \
