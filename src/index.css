@@ -140,12 +140,14 @@ body {
   display: flex;
   align-items: center;
   gap: 0.5rem;
-  transition: background-color 0.2s ease;
+  transition: background-color 0.2s ease, color 0.2s ease;
   font-family: var(--font-sans);
 }
 
 .run-btn:hover:not(:disabled) {
   background-color: #2ea043;
+  color: #fff;
+  text-shadow: 0 0 2px rgba(0, 0, 0, 0.3);
 }
 
 .run-btn:disabled {
@@ -160,6 +162,8 @@ body {
 
 .light-mode .run-btn:hover:not(:disabled) {
   background-color: #2ea043;
+  color: #fff;
+  text-shadow: 0 0 2px rgba(0, 0, 0, 0.3);
 }
 
 .font-btn {
@@ -192,6 +196,27 @@ body {
   flex-direction: column;
   border-bottom: 1px solid var(--border-color);
   min-height: 0;
+  overflow: hidden;
+}
+
+.editor-container {
+  display: flex !important;
+  flex: 1;
+  overflow: auto !important;
+  align-items: stretch;
+}
+
+.editor-container::-webkit-scrollbar {
+  height: 8px;
+}
+
+.editor-container::-webkit-scrollbar-track {
+  background: var(--bg-color);
+}
+
+.editor-container::-webkit-scrollbar-thumb {
+  background: var(--border-color);
+  border-radius: 4px;
 }
 
 .code-textarea {
@@ -213,6 +238,15 @@ body {
   background-color: #0d1117;
   border-right: 1px solid var(--border-color);
   z-index: 10;
+  overflow: hidden;
+  flex-shrink: 0;
+  min-width: fit-content;
+}
+
+.light-mode .line-numbers {
+  color: #57606a;
+  background-color: #f6f8fa;
+  border-right-color: #d0d7de;
 }
 
 .side-pane {
@@ -369,4 +403,170 @@ body {
 
 ::-webkit-scrollbar-thumb:hover {
   background: #484f58;
+}
+/* ===== COMPREHENSIVE LIGHT MODE OVERRIDES ===== */
+.light-mode {
+  --bg-color: #f6f8fa;
+  --panel-bg: #ffffff;
+  --border-color: #d0d7de;
+  --text-primary: #24292e;
+  --text-secondary: #57606a;
+  --primary-accent: #0969da;
+  --primary-hover: #0860ca;
+  --success: #1a7f0e;
+  --error: #da3633;
+  --warning: #bf8700;
+  --header-bg: #f0f0f0;
+}
+
+.light-mode body {
+  background-color: #fafbfc;
+  color: #24292e;
+}
+
+.light-mode .header {
+  background-color: #f0f0f0;
+  border-bottom-color: #d0d7de;
+}
+
+.light-mode .header-title {
+  color: #24292e;
+}
+
+.light-mode button {
+  color: #24292e;
+}
+
+.light-mode button:hover {
+  color: #0969da;
+}
+
+.light-mode .run-btn {
+  background-color: #1a7f0e;
+}
+
+.light-mode .run-btn:hover:not(:disabled) {
+  background-color: #238636;
+}
+
+.light-mode .run-btn:disabled {
+  opacity: 0.6;
+}
+
+.light-mode .editor-pane {
+  border-bottom-color: #d0d7de;
+}
+
+.light-mode .line-numbers {
+  color: #57606a;
+  background-color: #f6f8fa;
+  border-right-color: #d0d7de;
+}
+
+.light-mode .code-textarea {
+  color: #24292e;
+  background-color: #ffffff;
+}
+
+.light-mode .side-pane {
+  background-color: #f6f8fa;
+}
+
+.light-mode .output-pane {
+  border-right-color: #d0d7de;
+  background-color: #ffffff;
+}
+
+.light-mode .mentor-pane {
+  background-color: #ffffff;
+}
+
+.light-mode .pane-header {
+  background-color: #f0f0f0;
+  border-bottom-color: #d0d7de;
+  color: #57606a;
+}
+
+.light-mode .pane-content {
+  color: #24292e;
+  background-color: #ffffff;
+}
+
+.light-mode .mentor-content code {
+  background-color: rgba(209, 213, 219, 0.4);
+  color: #24292e;
+}
+
+.light-mode .mentor-content pre {
+  background-color: #f6f8fa;
+  color: #24292e;
+  border-color: #d0d7de;
+}
+
+.light-mode .mentor-content pre code {
+  color: #24292e;
+}
+
+.light-mode .placeholder-text {
+  color: #57606a;
+}
+
+.light-mode .error-text {
+  color: #da3633;
+}
+
+.light-mode .success-text {
+  color: #1a7f0e;
+}
+
+.light-mode .warning-text {
+  color: #bf8700;
+}
+
+.light-mode .accent-text {
+  color: #0969da;
+}
+
+.light-mode ::-webkit-scrollbar-track {
+  background: #f6f8fa;
+}
+
+.light-mode ::-webkit-scrollbar-thumb {
+  background: #d0d7de;
+}
+
+.light-mode ::-webkit-scrollbar-thumb:hover {
+  background: #a8b2bc;
+}
+
+.light-mode .language-select {
+  background-color: #ffffff;
+  color: #24292e;
+  border-color: #d0d7de;
+}
+
+.light-mode .language-select:hover,
+.light-mode .language-select:focus {
+  border-color: #0969da;
+}
+
+.light-mode .language-select option {
+  background-color: #ffffff;
+  color: #24292e;
+}
+
+/* Contrast improvements for light mode */
+.light-mode input[type="text"],
+.light-mode textarea,
+.light-mode select {
+  background-color: #ffffff;
+  color: #24292e;
+  border: 1px solid #d0d7de;
+}
+
+.light-mode input[type="text"]:focus,
+.light-mode textarea:focus,
+.light-mode select:focus {
+  border-color: #0969da;
+  outline: none;
 }

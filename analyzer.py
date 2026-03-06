@@ -10,13 +10,46 @@ from dataclasses import dataclass, asdict
 from typing import Any, Dict, List, Optional, Tuple
 
 
-
 @dataclass
 class Issue:
     line: int
     severity: str
     code: str
     message: str
+
+
+def verify_tools() -> Dict[str, bool]:
+    """Check which compilation/execution tools are available on the system."""
+    tools = {
+        "python": False,
+        "javascript": False,
+        "java": False,
+        "c": False,
+        "cpp": False,
+    }
+    
+    tool_commands = {
+        "python": [sys.executable, "--version"],
+        "javascript": ["node", "--version"],
+        "java": ["javac", "-version"],
+        "c": ["gcc", "--version"],
+        "cpp": ["g++", "--version"],
+    }
+    
+    for lang, cmd in tool_commands.items():
+        try:
+            subprocess.run(
+                cmd,
+                capture_output=True,
+                text=True,
+                timeout=2,
+            )
+            tools[lang] = True
+        except (FileNotFoundError, subprocess.TimeoutExpired):
+            tools[lang] = False
+    
+    return tools
+
 
 
 def _empty_execution() -> Dict[str, Any]:
@@ -759,12 +792,11 @@ def _analyze_language_not_yet_supported(language: str) -> Tuple[List[Issue], Dic
 def _get_ai_mentorship(code: str, language: str, execution: dict, issues: List[dict]) -> str:
     api_key = os.environ.get("GEMINI_API_KEY")
     if not api_key:
-        return ""
+        return "AI_MENTOR_DISABLED"
 
     try:
-        import google.generativeai as genai
-        genai.configure(api_key=api_key)
-        client = genai.GenerativeModel("gemini-2.5-flash")
+        from google import genai
+        client = genai.Client(api_key=api_key)
         
         # Build comprehensive error context including all issues and execution errors
         error_context = ""
@@ -802,16 +834,38 @@ def _get_ai_mentorship(code: str, language: str, execution: dict, issues: List[d
         
         # If there are any issues/errors, generate AI feedback
         if all_errors or error_context:
-            prompt = f"""Errors found: {error_context}Code: {code[:500]}For each error, explain in ONE plain sentence and ONE fix hint with line numbers. Be VERY BRIEF. No jargon."""
-            response = client.generate_content(contents=prompt)
-            return response.text
+            # Send full code without truncation for better context
+            prompt = (
+                f"You are a coding instructor. A student's code has these errors:\n\n"
+                f"{error_context}\n\n"
+                f"Code (language: {language}):\n"
+                f"```{language}\n{code}\n```\n\n"
+                f"For EACH error found:\n"
+                f"1. Explain in ONE plain sentence what went wrong\n"
+                f"2. Give ONE specific hint with the line number\n"
+                f"Never give the direct answer. Be VERY BRIEF (max 3 sentences total per error)."
+            )
+            
+            try:
+                response = client.models.generate_content(
+                    model="gemini-2.5-flash",
+                    contents=prompt,
+                )
+                return response.text if response.text else "LOOKS_GOOD"
+            except Exception as gemini_err:
+                # If Gemini fails, return a special code to indicate disabled
+                print(f"⚠️  Gemini API error: {str(gemini_err)}", file=sys.stderr)
+                return "AI_MENTOR_API_ERROR"
         else:
             # No errors found
             return "LOOKS_GOOD"
+    except ImportError:
+        print("⚠️  google.generativeai not installed", file=sys.stderr)
+        return "AI_MENTOR_DISABLED"
     except Exception as e:
         err_msg = str(e)
-        print(f"Error calling Gemini AI: {err_msg}", file=sys.stderr)
-        return f"**AI Mentor API Error:**\n\n```\n{err_msg}\n```\n\n*Make sure your API key is valid and not rate-limited.*"
+        print(f"⚠️  Error with AI Mentor: {err_msg}", file=sys.stderr)
+        return "AI_MENTOR_DISABLED"
 
 def analyze_code(code: str, language: str = "python") -> Dict[str, Any]:
     """

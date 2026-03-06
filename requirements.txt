@@ -2,3 +2,4 @@ Flask
 google-generativeai
 python-dotenv
 flask-cors
+flask-limiter

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
-import './index.css';
 import Editor from 'react-simple-code-editor';
 import Prism from 'prismjs';
+import 'prismjs/themes/prism.css';
 import 'prismjs/components/prism-clike';
 import 'prismjs/components/prism-javascript';
 import 'prismjs/components/prism-python';
@@ -25,63 +25,44 @@ const CodeIcon = () => (
 );
 // New toolbar icons matching provided design
 const FontDecreaseIcon = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6H6"/><path d="M12 18v-12"/><path d="M8 14l4-4 4 4"/></svg>
+    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6H6" /><path d="M12 18v-12" /><path d="M8 14l4-4 4 4" /></svg>
 );
 const FontIncreaseIcon = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 6h12"/><path d="M12 18v-12"/><path d="M10 10l4 4 4-4"/></svg>
+    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M6 6h12" /><path d="M12 18v-12" /><path d="M10 10l4 4 4-4" /></svg>
 );
 const SunIcon = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5"/><path d="M12 1v2"/><path d="M12 21v2"/><path d="M4.22 4.22l1.42 1.42"/><path d="M18.36 18.36l1.42 1.42"/><path d="M1 12h2"/><path d="M21 12h2"/><path d="M4.22 19.78l1.42-1.42"/><path d="M18.36 5.64l1.42-1.42"/></svg>
+    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="5" /><path d="M12 1v2" /><path d="M12 21v2" /><path d="M4.22 4.22l1.42 1.42" /><path d="M18.36 18.36l1.42 1.42" /><path d="M1 12h2" /><path d="M21 12h2" /><path d="M4.22 19.78l1.42-1.42" /><path d="M18.36 5.64l1.42-1.42" /></svg>
 );
 const MoonIcon = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z"/></svg>
+    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 12.79A9 9 0 1 1 11.21 3 7 7 0 0 0 21 12.79z" /></svg>
 );
 const LanguageIcon = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10"/><path d="M2 12h20"/><path d="M12 2a15.3 15.3 0 0 0 0 20"/><path d="M12 2a15.3 15.3 0 0 1 0 20"/></svg>
+    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><circle cx="12" cy="12" r="10" /><path d="M2 12h20" /><path d="M12 2a15.3 15.3 0 0 0 0 20" /><path d="M12 2a15.3 15.3 0 0 1 0 20" /></svg>
 );
 const UploadIcon = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><polyline points="17 8 12 3 7 8"/><line x1="12" y1="3" x2="12" y2="15"/></svg>
+    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4" /><polyline points="17 8 12 3 7 8" /><line x1="12" y1="3" x2="12" y2="15" /></svg>
 );
 const TrashIcon = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6"/><path d="M19 6l-2 14H7L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2"/></svg>
+    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><polyline points="3 6 5 6 21 6" /><path d="M19 6l-2 14H7L5 6" /><path d="M10 11v6" /><path d="M14 11v6" /><path d="M9 6V4a1 1 0 0 1 1-1h4a1 1 0 0 1 1 1v2" /></svg>
 );
-const FullscreenIcon = ({exit=false}) => (
+const FullscreenIcon = ({ exit = false }) => (
     exit ?
-    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6h-6v6"/><path d="M6 18h6v-6"/></svg>
-    :
-    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3"/><path d="M16 3h3a2 2 0 0 1 2 2v3"/><path d="M8 21H5a2 2 0 0 1-2-2v-3"/><path d="M16 21h3a2 2 0 0 0 2-2v-3"/></svg>
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6h-6v6" /><path d="M6 18h6v-6" /></svg>
+        :
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3" /><path d="M16 3h3a2 2 0 0 1 2 2v3" /><path d="M8 21H5a2 2 0 0 1-2-2v-3" /><path d="M16 21h3a2 2 0 0 0 2-2v-3" /></svg>
 );
 const ShareIcon = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/><polyline points="16 6 12 2 8 6"/><line x1="12" y1="2" x2="12" y2="15"/></svg>
-);
-
-// Professional language logo components
-const PythonLogo = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="#3776ab" stroke="#3776ab" strokeWidth="1"/><text x="12" y="15" fontSize="10" fontWeight="bold" textAnchor="middle" fill="#fff">Py</text></svg>
-);
-const JavaScriptLogo = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><rect x="2" y="2" width="20" height="20" fill="#f7df1e" rx="2"/><text x="12" y="16" fontSize="11" fontWeight="bold" textAnchor="middle" fill="#000">JS</text></svg>
-);
-const JavaLogo = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="#007396" stroke="#007396" strokeWidth="1"/><text x="12" y="15" fontSize="9" fontWeight="bold" textAnchor="middle" fill="#fff">☕</text></svg>
-);
-const CLogo = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="#007acc" stroke="#007acc" strokeWidth="1"/><text x="12" y="15" fontSize="11" fontWeight="bold" textAnchor="middle" fill="#fff">C</text></svg>
-);
-const CPPLogo = () => (
-    <svg xmlns="http://www.w3.org/2000/svg" width="24" height="24" viewBox="0 0 24 24"><circle cx="12" cy="12" r="11" fill="#00599c" stroke="#00599c" strokeWidth="1"/><text x="12" y="15" fontSize="9" fontWeight="bold" textAnchor="middle" fill="#fff">C++</text></svg>
+    <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8" /><polyline points="16 6 12 2 8 6" /><line x1="12" y1="2" x2="12" y2="15" /></svg>
 );
 
 const LanguageSelector = ({ language, onLanguageChange }) => {
     const languages = [
-        { id: 'python', name: 'Python', logo: PythonLogo },
-        { id: 'javascript', name: 'JavaScript', logo: JavaScriptLogo },
-        { id: 'java', name: 'Java', logo: JavaLogo },
-        { id: 'c', name: 'C', logo: CLogo },
-        { id: 'cpp', name: 'C++', logo: CPPLogo }
+        { id: 'python', name: 'Python' },
+        { id: 'javascript', name: 'JavaScript' },
+        { id: 'java', name: 'Java' },
+        { id: 'c', name: 'C' },
+        { id: 'cpp', name: 'C++' }
     ];
-    const currentLang = languages.find(l => l.id === language);
-    const CurrentLogo = currentLang?.logo || PythonLogo;
 
     return (
         <div className="language-selector-wrapper">
@@ -99,7 +80,13 @@ const LanguageSelector = ({ language, onLanguageChange }) => {
     );
 }
 
-// Lightweight markdown renderer string -> JSX
+// Lightweight markdown renderer string -> JSX (with XSS protection)
+const escapeHtml = (str) => {
+    const div = document.createElement('div');
+    div.textContent = str;
+    return div.innerHTML;
+};
+
 const renderMarkdown = (text) => {
     if (!text) return null;
     const parts = text.split(/(```[\s\S]*?```|`[^`]+`|\*\*[^*]+\*\*|\n\n)/g);
@@ -108,15 +95,15 @@ const renderMarkdown = (text) => {
         if (part.startsWith('```') && part.endsWith('```')) {
             const lines = part.slice(3, -3).split('\n');
             const code = lines.slice(1).join('\n').trim() || lines[0];
-            return <pre key={i}><code>{code}</code></pre>;
+            return <pre key={i}><code>{escapeHtml(code)}</code></pre>;
         }
         if (part.startsWith('`') && part.endsWith('`')) {
-            return <code key={i}>{part.slice(1, -1)}</code>;
+            return <code key={i}>{escapeHtml(part.slice(1, -1))}</code>;
         }
         if (part.startsWith('**') && part.endsWith('**')) {
-            return <strong key={i}>{part.slice(2, -2)}</strong>;
+            return <strong key={i}>{escapeHtml(part.slice(2, -2))}</strong>;
         }
-        return <span key={i}>{part}</span>;
+        return <span key={i}>{escapeHtml(part)}</span>;
     });
 };
 
@@ -163,14 +150,24 @@ export default function App() {
         setMentorFeedback('AI Mentor analyzing...');
         setIssues([]);
 
+        const API_URL = import.meta.env.VITE_API_URL || '';
+
         try {
-            const response = await fetch("http://127.0.0.1:5000/analyze", {
+            const response = await fetch(`${API_URL}/analyze`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ code, language }),
             });
 
-            const data = await response.json();
+            let data;
+            try {
+                data = await response.json();
+            } catch (jsonErr) {
+                setErrorMsg("Invalid JSON response from server. Make sure the backend is running correctly.");
+                setMentorFeedback('');
+                setIsAnalyzing(false);
+                return;
+            }
 
             // Show issues and output immediately
             if (data.issues) {
@@ -209,7 +206,7 @@ export default function App() {
     const decreaseFont = () => setFontSize(f => Math.max(f - 1, 8));
     const toggleDarkMode = () => setDarkMode(d => !d);
     const cycleLanguage = () => {
-        const langs = ['python','javascript','java','c','cpp'];
+        const langs = ['python', 'javascript', 'java', 'c', 'cpp'];
         const idx = langs.indexOf(language);
         setLanguage(langs[(idx + 1) % langs.length]);
     };
@@ -222,7 +219,7 @@ export default function App() {
     const handleShare = async () => {
         const text = `Code:\n${code}\n\nLanguage: ${language}\nURL: ${window.location.href}`;
         if (navigator.share) {
-            try { await navigator.share({ text }); } catch (_) {}
+            try { await navigator.share({ text }); } catch (_) { }
         } else {
             await navigator.clipboard.writeText(text);
             alert('Code copied to clipboard');
@@ -235,11 +232,19 @@ export default function App() {
             document.exitFullscreen().then(() => setIsFullscreen(false));
         }
     };
+    const MAX_FILE_SIZE = 1024 * 1024; // 1MB limit
+
     const handleFileChange = (e) => {
         const file = e.target.files && e.target.files[0];
         if (!file) return;
+
+        if (file.size > MAX_FILE_SIZE) {
+            alert('File too large. Maximum size is 1MB.');
+            return;
+        }
+
         const ext = file.name.split('.').pop().toLowerCase();
-        const map = {py:'python',js:'javascript',java:'java',c:'c',cpp:'cpp',cc:'cpp',cxx:'cpp'};
+        const map = { py: 'python', js: 'javascript', java: 'java', c: 'c', cpp: 'cpp', cc: 'cpp', cxx: 'cpp' };
         if (!map[ext]) {
             alert('Unsupported file type: ' + ext);
             return;
@@ -281,11 +286,11 @@ export default function App() {
                     <button className="font-btn" title="Decrease font" onClick={decreaseFont}>A−</button>
                     <button className="font-btn" title="Increase font" onClick={increaseFont}>A+</button>
                     {/* theme toggle */}
-                    <button title="Toggle dark/light" onClick={toggleDarkMode}>{darkMode ? <SunIcon/> : <MoonIcon/>}</button>
+                    <button title="Toggle dark/light" onClick={toggleDarkMode}>{darkMode ? <SunIcon /> : <MoonIcon />}</button>
                     {/* cycle language */}
-                    <button title="Next language" onClick={cycleLanguage}><LanguageIcon/></button>
+                    <button title="Next language" onClick={cycleLanguage}><LanguageIcon /></button>
                     {/* upload */}
-                    <button title="Upload code file" onClick={() => fileInputRef.current && fileInputRef.current.click()}><UploadIcon/></button>
+                    <button title="Upload code file" onClick={() => fileInputRef.current && fileInputRef.current.click()}><UploadIcon /></button>
                     <LanguageSelector language={language} onLanguageChange={setLanguage} />
                     <button
                         className="run-btn"
@@ -296,9 +301,9 @@ export default function App() {
                         {isAnalyzing ? "Running..." : "Run Code"}
                     </button>
                     {/* additional controls */}
-                    <button title="Clear output" onClick={clearOutput}><TrashIcon/></button>
-                    <button title="Toggle fullscreen" onClick={toggleFullscreen}><FullscreenIcon exit={isFullscreen}/></button>
-                    <button title="Share" onClick={handleShare}><ShareIcon/></button>
+                    <button title="Clear output" onClick={clearOutput}><TrashIcon /></button>
+                    <button title="Toggle fullscreen" onClick={toggleFullscreen}><FullscreenIcon exit={isFullscreen} /></button>
+                    <button title="Share" onClick={handleShare}><ShareIcon /></button>
                 </div>
             </header>
 
@@ -309,16 +314,20 @@ export default function App() {
                     <div className="pane-header">
                         <CodeIcon /> Editor
                     </div>
-                    <div style={{ flex: 1, overflowY: 'auto', overflowX: 'auto', backgroundColor: 'var(--bg-color)', minHeight: 0, display: 'flex' }}>
+                    <div style={{ flex: 1, overflowY: 'auto', overflowX: 'auto', backgroundColor: 'var(--bg-color)', minHeight: 0, display: 'flex' }} className="editor-container">
                         <div className="line-numbers" style={{ fontSize: fontSize + 'px' }}>
                             {code.split('\n').map((_, i) => (
-                                <div key={i}>{i + 1}</div>
+                                <div key={i} style={{ height: '1.6em' }}>{i + 1}</div>
                             ))}
                         </div>
-                        <div style={{ flex: 1, position: 'relative' }}>
+                        <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
                             <Editor
                                 value={code}
-                                onValueChange={code => setCode(code)}
+                                onValueChange={(newCode) => {
+                                    // Clean up extra line endings and normalize the code
+                                    const cleanedCode = newCode.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
+                                    setCode(cleanedCode);
+                                }}
                                 highlight={code => Prism.highlight(code, getPrismLanguage(language), language)}
                                 padding={24}
                                 style={{
@@ -382,6 +391,20 @@ export default function App() {
                         <div className="pane-content mentor-content">
                             {isAnalyzing ? (
                                 <div className="placeholder-text">Analyzing code ...</div>
+                            ) : mentorFeedback && mentorFeedback === "AI_MENTOR_DISABLED" ? (
+                                <div className="placeholder-text">
+                                    <SparklesIcon />
+                                    AI Mentor is disabled.
+                                    <br />
+                                    (Set GEMINI_API_KEY in .env to enable)
+                                </div>
+                            ) : mentorFeedback && mentorFeedback === "AI_MENTOR_API_ERROR" ? (
+                                <div className="placeholder-text" style={{ color: 'var(--warning)' }}>
+                                    <SparklesIcon />
+                                    AI Mentor API error.
+                                    <br />
+                                    Check if API key is valid and not rate-limited.
+                                </div>
                             ) : mentorFeedback && !mentorFeedback.includes("LOOKS_GOOD") ? (
                                 <div>{renderMarkdown(mentorFeedback)}</div>
                             ) : mentorFeedback && mentorFeedback.includes("LOOKS_GOOD") ? (

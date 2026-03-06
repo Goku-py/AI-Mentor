@@ -1,0 +1,17 @@
+# Render.com deployment configuration
+# https://render.com/docs/blueprint-spec
+services:
+  - type: web
+    name: antigravity-backend
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    plan: free
+    envVars:
+      - key: FLASK_ENV
+        value: production
+      - key: GEMINI_API_KEY
+        sync: false  # Must be set manually in Render dashboard
+      - key: ALLOWED_ORIGINS
+        sync: false  # Set to your Vercel frontend URL
+      - key: PORT
+        value: 5000
