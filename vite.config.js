@@ -5,19 +5,7 @@ export default defineConfig({
   plugins: [react()],
   server: {
     proxy: {
-      '/analyze': {
-        target: 'http://localhost:5000',
-        changeOrigin: true,
-      },
-      '/health': {
-        target: 'http://localhost:5000',
-        changeOrigin: true,
-      },
-      '/tools': {
-        target: 'http://localhost:5000',
-        changeOrigin: true,
-      },
-      '/debug': {
+      '/api/v1': {
         target: 'http://localhost:5000',
         changeOrigin: true,
       },

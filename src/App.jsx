@@ -80,13 +80,9 @@ const LanguageSelector = ({ language, onLanguageChange }) => {
     );
 }
 
-// Lightweight markdown renderer string -> JSX (with XSS protection)
-const escapeHtml = (str) => {
-    const div = document.createElement('div');
-    div.textContent = str;
-    return div.innerHTML;
-};
-
+// Lightweight markdown renderer string -> JSX.
+// XSS protection is provided natively by React: all string children inside
+// JSX are text nodes — never interpreted as HTML.
 const renderMarkdown = (text) => {
     if (!text) return null;
     const parts = text.split(/(```[\s\S]*?```|`[^`]+`|\*\*[^*]+\*\*|\n\n)/g);
@@ -95,15 +91,15 @@ const renderMarkdown = (text) => {
         if (part.startsWith('```') && part.endsWith('```')) {
             const lines = part.slice(3, -3).split('\n');
             const code = lines.slice(1).join('\n').trim() || lines[0];
-            return <pre key={i}><code>{escapeHtml(code)}</code></pre>;
+            return <pre key={i}><code>{code}</code></pre>;
         }
         if (part.startsWith('`') && part.endsWith('`')) {
-            return <code key={i}>{escapeHtml(part.slice(1, -1))}</code>;
+            return <code key={i}>{part.slice(1, -1)}</code>;
         }
         if (part.startsWith('**') && part.endsWith('**')) {
-            return <strong key={i}>{escapeHtml(part.slice(2, -2))}</strong>;
+            return <strong key={i}>{part.slice(2, -2)}</strong>;
         }
-        return <span key={i}>{escapeHtml(part)}</span>;
+        return <span key={i}>{part}</span>;
     });
 };
 
@@ -153,7 +149,7 @@ export default function App() {
         const API_URL = import.meta.env.VITE_API_URL || '';
 
         try {
-            const response = await fetch(`${API_URL}/analyze`, {
+            const response = await fetch(`${API_URL}/api/v1/analyze`, {
                 method: "POST",
                 headers: { "Content-Type": "application/json" },
                 body: JSON.stringify({ code, language }),

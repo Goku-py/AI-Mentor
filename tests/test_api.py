@@ -22,12 +22,12 @@ class TestHealthEndpoint:
     
     def test_health_endpoint_exists(self, client):
         """Health endpoint should return 200."""
-        response = client.get('/health')
+        response = client.get('/api/v1/health')
         assert response.status_code == 200
     
     def test_health_response_structure(self, client):
         """Health response should include status and tool info."""
-        response = client.get('/health')
+        response = client.get('/api/v1/health')
         data = json.loads(response.data)
         assert 'status' in data
         assert 'available_tools' in data
@@ -39,12 +39,12 @@ class TestToolsEndpoint:
     
     def test_tools_endpoint_exists(self, client):
         """Tools endpoint should return 200."""
-        response = client.get('/tools')
+        response = client.get('/api/v1/tools')
         assert response.status_code == 200
     
     def test_tools_response_structure(self, client):
         """Tools response should list available tools."""
-        response = client.get('/tools')
+        response = client.get('/api/v1/tools')
         data = json.loads(response.data)
         assert 'available' in data
         assert 'message' in data
@@ -55,14 +55,14 @@ class TestAnalyzeEndpoint:
     
     def test_analyze_endpoint_requires_post(self, client):
         """GET request to POST-only endpoint should not succeed."""
-        response = client.get('/analyze')
+        response = client.get('/api/v1/analyze')
         # Flask returns 404 (caught by static catch-all) or 405 depending on
         # routing order; either way it must not return 200.
         assert response.status_code in (404, 405)
     
     def test_analyze_requires_code(self, client):
         """Analyze should reject missing code."""
-        response = client.post('/analyze',
+        response = client.post('/api/v1/analyze',
                                data=json.dumps({}),
                                content_type='application/json')
         assert response.status_code == 400
@@ -71,14 +71,14 @@ class TestAnalyzeEndpoint:
     
     def test_analyze_requires_non_empty_code(self, client):
         """Analyze should reject empty/whitespace-only code."""
-        response = client.post('/analyze',
+        response = client.post('/api/v1/analyze',
                                data=json.dumps({'code': '   ', 'language': 'python'}),
                                content_type='application/json')
         assert response.status_code == 400
     
     def test_analyze_python_success(self, client):
         """Analyze should process valid Python code."""
-        response = client.post('/analyze',
+        response = client.post('/api/v1/analyze',
                                data=json.dumps({
                                    'code': 'print("hello")',
                                    'language': 'python'
@@ -91,7 +91,7 @@ class TestAnalyzeEndpoint:
     
     def test_analyze_includes_execution_result(self, client):
         """Analyze response should include execution output."""
-        response = client.post('/analyze',
+        response = client.post('/api/v1/analyze',
                                data=json.dumps({
                                    'code': 'print("test output")',
                                    'language': 'python'
@@ -105,7 +105,7 @@ class TestAnalyzeEndpoint:
         """Analyze response should include detected issues."""
         # Code with a long line (> 79 chars)
         code = 'x = ' + 'y' * 100
-        response = client.post('/analyze',
+        response = client.post('/api/v1/analyze',
                                data=json.dumps({
                                    'code': code,
                                    'language': 'python'
@@ -117,7 +117,7 @@ class TestAnalyzeEndpoint:
     
     def test_analyze_includes_ai_feedback(self, client):
         """Analyze response should include AI mentor feedback."""
-        response = client.post('/analyze',
+        response = client.post('/api/v1/analyze',
                                data=json.dumps({
                                    'code': 'x = 10\nprint(x)',
                                    'language': 'python'
@@ -128,7 +128,7 @@ class TestAnalyzeEndpoint:
     
     def test_analyze_with_syntax_error(self, client):
         """Analyze should handle syntax errors gracefully."""
-        response = client.post('/analyze',
+        response = client.post('/api/v1/analyze',
                                data=json.dumps({
                                    'code': 'print("missing paren',
                                    'language': 'python'
@@ -142,7 +142,7 @@ class TestAnalyzeEndpoint:
     
     def test_analyze_default_language_is_python(self, client):
         """Language should default to Python if not specified."""
-        response = client.post('/analyze',
+        response = client.post('/api/v1/analyze',
                                data=json.dumps({
                                    'code': 'print("hello")'
                                }),
@@ -152,7 +152,7 @@ class TestAnalyzeEndpoint:
     
     def test_analyze_with_invalid_json(self, client):
         """Malformed JSON should be handled gracefully."""
-        response = client.post('/analyze',
+        response = client.post('/api/v1/analyze',
                                data='invalid json',
                                content_type='application/json')
         assert response.status_code == 400
@@ -174,7 +174,7 @@ class TestCORSHeaders:
     
     def test_cors_headers_present(self, client):
         """Response should include CORS headers."""
-        response = client.options('/analyze')
+        response = client.options('/api/v1/analyze')
         # CORS headers should be set
         # The actual check depends on flask-cors configuration
         assert response.status_code == 200

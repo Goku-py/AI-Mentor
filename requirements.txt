@@ -1,5 +1,5 @@
-Flask
-python-dotenv
-flask-cors
-flask-limiter
-gunicorn
+Flask>=3.1.0
+python-dotenv>=1.1.0
+flask-cors>=5.0.0
+flask-limiter>=3.9.0
+gunicorn>=23.0.0
