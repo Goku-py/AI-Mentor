@@ -55,7 +55,6 @@ ALLOWED_LANGUAGES = {"python", "javascript", "js", "java", "c", "cpp", "c++"}
 # legacy redirect routes remain on the root app.
 # ---------------------------------------------------------------------------
 v1_bp = Blueprint('v1', __name__, url_prefix='/api/v1')
-app.register_blueprint(v1_bp)
 
 # ---------------------------------------------------------------------------
 # Bot / scraper defense
@@ -382,6 +381,8 @@ def analyze():
             500,
         )
 
+
+app.register_blueprint(v1_bp)
 
 if __name__ == "__main__":
     # Validate environment
