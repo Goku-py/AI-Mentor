@@ -8,7 +8,8 @@
 
 > **AI Code Mentor** is a coding practice tool for students. You write code, run it, and if something goes wrong — the AI explains *what* went wrong and gives you a **hint** to fix it yourself. It never just hands you the answer.
 
-![AI Code Mentor Screenshot](docs/assets/preview.png)
+<img width="1919" height="995" alt="image" src="https://github.com/user-attachments/assets/27f1a775-bc57-4d80-9479-45dcc33a6f25" />
+
 
 ---
 
