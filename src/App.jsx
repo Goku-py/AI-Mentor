@@ -315,7 +315,7 @@ export default function App() {
                         <CodeIcon /> Editor
                     </div>
                     <div style={{ flex: 1, overflowY: 'auto', overflowX: 'auto', backgroundColor: 'var(--bg-color)', minHeight: 0, display: 'flex' }} className="editor-container">
-                        <div className="line-numbers" style={{ fontSize: fontSize + 'px' }}>
+                        <div className="line-numbers" style={{ fontSize: fontSize + 'px', minHeight: '100%' }}>
                             {code.split('\n').map((_, i) => (
                                 <div key={i} style={{ height: '1.6em' }}>{i + 1}</div>
                             ))}

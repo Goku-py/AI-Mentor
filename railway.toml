@@ -3,4 +3,4 @@ builder = "NIXPACKS"
 buildCommand = "npm ci && npm run build"
 
 [deploy]
-startCommand = "gunicorn --bind 0.0.0.0:$PORT app:app"
+startCommand = "sh -c 'gunicorn --bind 0.0.0.0:$PORT app:app'"

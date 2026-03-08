@@ -17,6 +17,10 @@ export default defineConfig({
         target: 'http://localhost:5000',
         changeOrigin: true,
       },
+      '/debug': {
+        target: 'http://localhost:5000',
+        changeOrigin: true,
+      },
     },
     port: 5173,
     host: 'localhost',

@@ -247,7 +247,8 @@ body {
   flex-shrink: 0;
   min-width: fit-content;
   width: auto;
-  height: fit-content;
+  align-self: flex-start;
+  min-height: 100%;
 }
 
 .light-mode .line-numbers {

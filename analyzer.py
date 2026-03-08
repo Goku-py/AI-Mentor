@@ -7,6 +7,7 @@ import re
 import subprocess
 import sys
 import tempfile
+import time
 import urllib.error
 import urllib.parse
 import urllib.request
@@ -922,38 +923,50 @@ def _get_ai_mentorship(code: str, language: str, execution: dict, issues: List[d
                 method="POST",
             )
 
-            try:
-                with urllib.request.urlopen(req, timeout=15) as response:
-                    status_code = response.getcode()
-                    raw_body = response.read().decode("utf-8", errors="replace")
-            except urllib.error.HTTPError as http_err:
-                status_code = http_err.code
-                raw_body = ""
+            _MAX_RETRIES = 3
+            for _attempt in range(_MAX_RETRIES):
                 try:
-                    raw_body = (http_err.read() or b"").decode("utf-8", errors="replace")
-                except Exception:
+                    with urllib.request.urlopen(req, timeout=15) as response:
+                        status_code = response.getcode()
+                        raw_body = response.read().decode("utf-8", errors="replace")
+                    break  # success – exit retry loop
+                except urllib.error.HTTPError as http_err:
+                    status_code = http_err.code
                     raw_body = ""
+                    try:
+                        raw_body = (http_err.read() or b"").decode("utf-8", errors="replace")
+                    except Exception:
+                        raw_body = ""
 
-                error_message = ""
-                # Parse error JSON only after checking status code.
-                try:
-                    parsed_error = json.loads(raw_body) if raw_body else {}
-                    if isinstance(parsed_error, dict):
-                        error_obj = parsed_error.get("error")
-                        if isinstance(error_obj, dict):
-                            error_message = str(error_obj.get("message") or "")
-                except json.JSONDecodeError:
+                    if status_code == 429 and _attempt < _MAX_RETRIES - 1:
+                        backoff = 2 ** _attempt  # 1s, 2s, 4s
+                        print(
+                            f"[Gemini] Rate limited (429). Retrying in {backoff}s "
+                            f"(attempt {_attempt + 1}/{_MAX_RETRIES})",
+                            file=sys.stderr,
+                        )
+                        time.sleep(backoff)
+                        continue
+
                     error_message = ""
+                    try:
+                        parsed_error = json.loads(raw_body) if raw_body else {}
+                        if isinstance(parsed_error, dict):
+                            error_obj = parsed_error.get("error")
+                            if isinstance(error_obj, dict):
+                                error_message = str(error_obj.get("message") or "")
+                    except json.JSONDecodeError:
+                        error_message = ""
 
-                mapped_code = _map_gemini_http_error(status_code, raw_body, error_message)
-                print(
-                    f"[Gemini] HTTP {status_code}. mapped_code={mapped_code}. message={error_message}",
-                    file=sys.stderr,
-                )
-                return mapped_code
-            except urllib.error.URLError as url_err:
-                print(f"[Gemini] Network error: {url_err}", file=sys.stderr)
-                return "AI_MENTOR_API_ERROR"
+                    mapped_code = _map_gemini_http_error(status_code, raw_body, error_message)
+                    print(
+                        f"[Gemini] HTTP {status_code}. mapped_code={mapped_code}. message={error_message}",
+                        file=sys.stderr,
+                    )
+                    return mapped_code
+                except urllib.error.URLError as url_err:
+                    print(f"[Gemini] Network error: {url_err}", file=sys.stderr)
+                    return "AI_MENTOR_API_ERROR"
 
             if status_code < 200 or status_code >= 300:
                 print(f"[Gemini] Unexpected status: {status_code}", file=sys.stderr)
