@@ -888,16 +888,23 @@ def _get_ai_mentorship(code: str, language: str, execution: dict, issues: List[d
         
         # If there are any issues/errors, generate AI feedback
         if all_errors or error_context:
-            # Send full code without truncation for better context
+            # Number each source line so the model can cite them precisely
+            numbered_lines = "\n".join(
+                f"{i}: {line}" for i, line in enumerate(code.splitlines(), start=1)
+            )
+
             prompt = (
-                f"You are a coding instructor. A student's code has these errors:\n\n"
-                f"{error_context}\n\n"
-                f"Code (language: {language}):\n"
-                f"```{language}\n{code}\n```\n\n"
-                f"For EACH error found:\n"
-                f"1. Explain in ONE plain sentence what went wrong\n"
-                f"2. Give ONE specific hint with the line number\n"
-                f"Never give the direct answer. Be VERY BRIEF (max 3 sentences total per error)."
+                "You are a strict coding instructor. A student submitted code that has errors.\n"
+                "RULES YOU MUST FOLLOW:\n"
+                "- For EVERY issue you mention, you MUST quote the exact line of code that causes it "
+                "using the format: **Line N:** `<exact code on that line>`\n"
+                "- After the quote, explain in ONE plain sentence what is wrong.\n"
+                "- Then give ONE concise hint toward the fix (do NOT give the corrected code).\n"
+                "- If multiple errors exist, address each one separately.\n"
+                "- Be VERY BRIEF — max 3 sentences per error.\n\n"
+                f"Detected issues:\n{error_context}\n\n"
+                f"Student code ({language}) with line numbers:\n"
+                f"```\n{numbered_lines}\n```"
             )
 
             endpoint = (

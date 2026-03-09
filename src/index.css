@@ -580,3 +580,105 @@ body {
   border-color: #0969da;
   outline: none;
 }
+
+/* ===== RESPONSIVE / MOBILE LAYOUT ===== */
+@media (max-width: 768px) {
+  body {
+    overflow: auto;
+  }
+
+  .app-container {
+    height: auto;
+    min-height: 100vh;
+  }
+
+  .header {
+    flex-direction: column;
+    gap: 0.5rem;
+    padding: 0.5rem 0.75rem;
+  }
+
+  .header-title {
+    font-size: 1rem;
+  }
+
+  .controls {
+    flex-wrap: wrap;
+    justify-content: center;
+    gap: 0.5rem;
+  }
+
+  .language-select {
+    min-width: 120px;
+    font-size: 0.8rem;
+    padding: 0.4rem 0.75rem;
+    padding-right: 2rem;
+  }
+
+  .run-btn {
+    padding: 0.4rem 0.75rem;
+    font-size: 0.85rem;
+  }
+
+  .main-content {
+    flex-direction: column;
+    flex: none;
+  }
+
+  .editor-pane {
+    height: 40vh;
+    min-height: 200px;
+    flex: none;
+  }
+
+  .side-pane {
+    flex-direction: column;
+    height: auto;
+    flex: none;
+  }
+
+  .output-pane {
+    border-right: none;
+    border-bottom: 1px solid var(--border-color);
+    min-height: 150px;
+  }
+
+  .mentor-pane {
+    min-height: 200px;
+  }
+
+  .pane-content {
+    font-size: 12px;
+    padding: 0.75rem;
+  }
+
+  .pane-content.mentor-content {
+    font-size: 13px;
+    padding: 1rem;
+  }
+
+  .pane-header {
+    padding: 0.5rem 0.75rem;
+    font-size: 0.75rem;
+  }
+
+  .line-numbers {
+    padding: 24px 8px;
+    font-size: 12px !important;
+  }
+}
+
+@media (max-width: 480px) {
+  .header-title span {
+    font-size: 0.9rem;
+  }
+
+  .controls > button:not(.run-btn) {
+    padding: 0.2rem;
+  }
+
+  .editor-pane {
+    height: 35vh;
+    min-height: 180px;
+  }
+}

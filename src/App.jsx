@@ -103,8 +103,16 @@ const renderMarkdown = (text) => {
     });
 };
 
+const DEFAULT_CODE = {
+    python: 'print("Hello World!")\n# Try making an intentional mistake here\n# my_var = 10 / 0',
+    javascript: 'console.log("Hello World!");\n// Try making an intentional mistake here\n// let x = undefined.property;',
+    java: 'public class Main {\n    public static void main(String[] args) {\n        System.out.println("Hello World!");\n        // Try making an intentional mistake here\n    }\n}',
+    c: '#include <stdio.h>\n\nint main() {\n    printf("Hello World!\\n");\n    // Try making an intentional mistake here\n    return 0;\n}',
+    cpp: '#include <iostream>\nusing namespace std;\n\nint main() {\n    cout << "Hello World!" << endl;\n    // Try making an intentional mistake here\n    return 0;\n}',
+};
+
 export default function App() {
-    const [code, setCode] = useState('print("Hello World!")\n# Try making an intentional mistake here\n# my_var = 10 / 0');
+    const [code, setCode] = useState(DEFAULT_CODE.python);
     const [language, setLanguage] = useState('python');
     const [isAnalyzing, setIsAnalyzing] = useState(false);
 
@@ -201,10 +209,15 @@ export default function App() {
     const increaseFont = () => setFontSize(f => Math.min(f + 1, 36));
     const decreaseFont = () => setFontSize(f => Math.max(f - 1, 8));
     const toggleDarkMode = () => setDarkMode(d => !d);
+    const handleLanguageChange = (newLang) => {
+        setLanguage(newLang);
+        setCode(DEFAULT_CODE[newLang] || '');
+    };
+
     const cycleLanguage = () => {
         const langs = ['python', 'javascript', 'java', 'c', 'cpp'];
         const idx = langs.indexOf(language);
-        setLanguage(langs[(idx + 1) % langs.length]);
+        handleLanguageChange(langs[(idx + 1) % langs.length]);
     };
     const clearOutput = () => {
         setOutput('');
@@ -249,6 +262,7 @@ export default function App() {
         reader.onload = evt => {
             setCode(evt.target.result);
             setLanguage(map[ext]);
+            // File upload: keep the file's content, only change language
         };
         reader.readAsText(file);
     };
@@ -287,7 +301,7 @@ export default function App() {
                     <button title="Next language" onClick={cycleLanguage}><LanguageIcon /></button>
                     {/* upload */}
                     <button title="Upload code file" onClick={() => fileInputRef.current && fileInputRef.current.click()}><UploadIcon /></button>
-                    <LanguageSelector language={language} onLanguageChange={setLanguage} />
+                    <LanguageSelector language={language} onLanguageChange={handleLanguageChange} />
                     <button
                         className="run-btn"
                         onClick={handleRun}
