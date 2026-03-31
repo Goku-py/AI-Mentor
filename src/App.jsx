@@ -1,13 +1,7 @@
-import React, { useState } from 'react';
+import React, { useState, useEffect } from 'react';
 import Editor from 'react-simple-code-editor';
 import Prism from 'prismjs';
 import 'prismjs/themes/prism.css';
-import 'prismjs/components/prism-clike';
-import 'prismjs/components/prism-javascript';
-import 'prismjs/components/prism-python';
-import 'prismjs/components/prism-c';
-import 'prismjs/components/prism-cpp';
-import 'prismjs/components/prism-java';
 import 'prismjs/themes/prism-tomorrow.css';
 
 // Minimal inline SVG icons for styling
@@ -141,11 +135,32 @@ export default function App() {
         localStorage.setItem('darkMode', darkMode);
     }, [darkMode]);
 
-    React.useEffect(() => {
+    useEffect(() => {
         const handler = () => setIsFullscreen(!!document.fullscreenElement);
         document.addEventListener('fullscreenchange', handler);
         return () => document.removeEventListener('fullscreenchange', handler);
     }, []);
+
+    useEffect(() => {
+        const loadPrismLanguage = async () => {
+            if (language === 'javascript') {
+                await import('prismjs/components/prism-javascript');
+            } else if (language === 'python') {
+                await import('prismjs/components/prism-python');
+            } else if (language === 'java') {
+                await import('prismjs/components/prism-clike');
+                await import('prismjs/components/prism-java');
+            } else if (language === 'c' || language === 'cpp') {
+                await import('prismjs/components/prism-clike');
+                await import('prismjs/components/prism-c');
+                await import('prismjs/components/prism-cpp');
+            }
+            // Force re-render to apply syntax highlighting
+            setCode(c => c + ' ');
+            setTimeout(() => setCode(c => c.slice(0, -1)), 0);
+        };
+        loadPrismLanguage();
+    }, [language]);
 
     const handleRun = async () => {
         setIsAnalyzing(true);

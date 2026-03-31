@@ -312,7 +312,7 @@ def debug_gemini_status():
 
 @v1_bp.route("/analyze", methods=["POST"])
 @limiter.limit("10 per minute; 100 per day")
-def analyze():
+async def analyze():
     payload = request.get_json(silent=True) or {}
 
     code = payload.get("code")
@@ -367,7 +367,7 @@ def analyze():
         )
 
     try:
-        result = analyze_code(code=code, language=language)
+        result = await analyze_code(code=code, language=language)
         return jsonify(result), 200
     except Exception as exc:  # pragma: no cover - defensive
         app.logger.exception("Error during code analysis: %s", exc)

@@ -13,6 +13,8 @@ import urllib.parse
 import urllib.request
 from dataclasses import dataclass, asdict
 from typing import Any, Dict, List, Optional, Tuple
+import httpx
+import asyncio
 
 
 @dataclass
@@ -221,41 +223,37 @@ def _parse_python_traceback(stderr: str) -> Dict[str, Any]:
 def _run_python(code: str, timeout: float = 3.0) -> Dict[str, Any]:
     execution = _empty_execution()
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        script_path = f"{tmp_dir}/main.py"
-        with open(script_path, "w", encoding="utf-8") as f:
-            f.write(code)
+    try:
+        completed = subprocess.run(
+            [sys.executable],
+            input=code,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except subprocess.TimeoutExpired as exc:
+        execution["stdout"] = exc.stdout or ""
+        execution["stderr"] = exc.stderr or ""
+        execution["returncode"] = -1
+        execution["timed_out"] = True
+        execution["error"] = {
+            "type": "Timeout",
+            "message": "Program execution took too long and was stopped (possible infinite loop or heavy computation).",
+            "line": None,
+            "explanation": "The program did not finish within the allowed time limit.",
+            "suggestions": [
+                "Check for infinite loops or very slow operations.",
+                "Try running a smaller piece of the program or simplifying the logic.",
+            ],
+        }
+        return execution
 
-        try:
-            completed = subprocess.run(
-                [sys.executable, script_path],
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
-        except subprocess.TimeoutExpired as exc:
-            execution["stdout"] = exc.stdout or ""
-            execution["stderr"] = exc.stderr or ""
-            execution["returncode"] = -1
-            execution["timed_out"] = True
-            execution["error"] = {
-                "type": "Timeout",
-                "message": "Program execution took too long and was stopped (possible infinite loop or heavy computation).",
-                "line": None,
-                "explanation": "The program did not finish within the allowed time limit.",
-                "suggestions": [
-                    "Check for infinite loops or very slow operations.",
-                    "Try running a smaller piece of the program or simplifying the logic.",
-                ],
-            }
-            return execution
+    execution["stdout"] = completed.stdout or ""
+    execution["stderr"] = completed.stderr or ""
+    execution["returncode"] = completed.returncode
 
-        execution["stdout"] = completed.stdout or ""
-        execution["stderr"] = completed.stderr or ""
-        execution["returncode"] = completed.returncode
-
-        if completed.returncode != 0:
-            execution["error"] = _parse_python_traceback(execution["stderr"])
+    if completed.returncode != 0:
+        execution["error"] = _parse_python_traceback(execution["stderr"])
 
     return execution
 
@@ -334,54 +332,50 @@ def _parse_node_error(stderr: str) -> Dict[str, Any]:
 def _run_node(code: str, timeout: float = 3.0) -> Dict[str, Any]:
     execution = _empty_execution()
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        script_path = f"{tmp_dir}/main.js"
-        with open(script_path, "w", encoding="utf-8") as f:
-            f.write(code)
+    try:
+        completed = subprocess.run(
+            ["node"],
+            input=code,
+            capture_output=True,
+            text=True,
+            timeout=timeout,
+        )
+    except FileNotFoundError:
+        execution["tool_missing"] = True
+        execution["error"] = {
+            "type": "NodeNotFound",
+            "message": "Node.js runtime ('node') was not found on the server.",
+            "line": None,
+            "explanation": "The server cannot execute JavaScript code because Node.js is not installed or not on PATH.",
+            "suggestions": [
+                "Install Node.js and make sure the 'node' command is available in your terminal.",
+                "After installing, restart the server and try again.",
+            ],
+        }
+        return execution
+    except subprocess.TimeoutExpired as exc:
+        execution["stdout"] = exc.stdout or ""
+        execution["stderr"] = exc.stderr or ""
+        execution["returncode"] = -1
+        execution["timed_out"] = True
+        execution["error"] = {
+            "type": "Timeout",
+            "message": "Program execution took too long and was stopped (possible infinite loop or heavy computation).",
+            "line": None,
+            "explanation": "The program did not finish within the allowed time limit.",
+            "suggestions": [
+                "Check for infinite loops or very slow operations.",
+                "Try running a smaller piece of the program or simplifying the logic.",
+            ],
+        }
+        return execution
 
-        try:
-            completed = subprocess.run(
-                ["node", script_path],
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
-        except FileNotFoundError:
-            execution["tool_missing"] = True
-            execution["error"] = {
-                "type": "NodeNotFound",
-                "message": "Node.js runtime ('node') was not found on the server.",
-                "line": None,
-                "explanation": "The server cannot execute JavaScript code because Node.js is not installed or not on PATH.",
-                "suggestions": [
-                    "Install Node.js and make sure the 'node' command is available in your terminal.",
-                    "After installing, restart the server and try again.",
-                ],
-            }
-            return execution
-        except subprocess.TimeoutExpired as exc:
-            execution["stdout"] = exc.stdout or ""
-            execution["stderr"] = exc.stderr or ""
-            execution["returncode"] = -1
-            execution["timed_out"] = True
-            execution["error"] = {
-                "type": "Timeout",
-                "message": "Program execution took too long and was stopped (possible infinite loop or heavy computation).",
-                "line": None,
-                "explanation": "The program did not finish within the allowed time limit.",
-                "suggestions": [
-                    "Check for infinite loops or very slow operations.",
-                    "Try running a smaller piece of the program or simplifying the logic.",
-                ],
-            }
-            return execution
+    execution["stdout"] = completed.stdout or ""
+    execution["stderr"] = completed.stderr or ""
+    execution["returncode"] = completed.returncode
 
-        execution["stdout"] = completed.stdout or ""
-        execution["stderr"] = completed.stderr or ""
-        execution["returncode"] = completed.returncode
-
-        if completed.returncode != 0:
-            execution["error"] = _parse_node_error(execution["stderr"])
+    if completed.returncode != 0:
+        execution["error"] = _parse_node_error(execution["stderr"])
 
     return execution
 
@@ -846,7 +840,7 @@ def _map_gemini_http_error(status_code: int, body_text: str, error_message: str)
     return "AI_MENTOR_API_ERROR"
 
 
-def _get_ai_mentorship(code: str, language: str, execution: dict, issues: List[dict]) -> str:
+async def _get_ai_mentorship(code: str, language: str, execution: dict, issues: List[dict]) -> str:
     api_key = _get_valid_gemini_api_key()
     if not api_key:
         return "AI_MENTOR_DISABLED"
@@ -922,59 +916,24 @@ def _get_ai_mentorship(code: str, language: str, execution: dict, issues: List[d
                     }
                 ]
             }
-            request_body = json.dumps(payload).encode("utf-8")
-            req = urllib.request.Request(
-                endpoint,
-                data=request_body,
-                headers={"Content-Type": "application/json"},
-                method="POST",
-            )
 
             _MAX_RETRIES = 3
-            for _attempt in range(_MAX_RETRIES):
-                try:
-                    with urllib.request.urlopen(req, timeout=15) as response:
-                        status_code = response.getcode()
-                        raw_body = response.read().decode("utf-8", errors="replace")
-                    break  # success – exit retry loop
-                except urllib.error.HTTPError as http_err:
-                    status_code = http_err.code
-                    raw_body = ""
+            async with httpx.AsyncClient(timeout=15.0) as client:
+                for _attempt in range(_MAX_RETRIES):
                     try:
-                        raw_body = (http_err.read() or b"").decode("utf-8", errors="replace")
-                    except Exception:
-                        raw_body = ""
-
-                    if status_code == 429 and _attempt < _MAX_RETRIES - 1:
-                        backoff = 2 ** _attempt  # 1s, 2s, 4s
-                        print(
-                            f"[Gemini] Rate limited (429). Retrying in {backoff}s "
-                            f"(attempt {_attempt + 1}/{_MAX_RETRIES})",
-                            file=sys.stderr,
-                        )
-                        time.sleep(backoff)
-                        continue
-
-                    error_message = ""
-                    try:
-                        parsed_error = json.loads(raw_body) if raw_body else {}
-                        if isinstance(parsed_error, dict):
-                            error_obj = parsed_error.get("error")
-                            if isinstance(error_obj, dict):
-                                error_message = str(error_obj.get("message") or "")
-                    except json.JSONDecodeError:
-                        error_message = ""
-
-                    mapped_code = _map_gemini_http_error(status_code, raw_body, error_message)
-                    print(
-                        f"[Gemini] HTTP {status_code}. mapped_code={mapped_code}. message={error_message}",
-                        file=sys.stderr,
-                    )
-                    return mapped_code
-                except urllib.error.URLError as url_err:
-                    print(f"[Gemini] Network error: {url_err}", file=sys.stderr)
-                    return "AI_MENTOR_API_ERROR"
-
+                        response = await client.post(endpoint, json=payload)
+                        status_code = response.status_code
+                        raw_body = response.text
+                        if status_code == 429 and _attempt < _MAX_RETRIES - 1:
+                            backoff = 2 ** _attempt
+                            print(f"[Gemini] Rate limited (429). Retrying in {backoff}s...", file=sys.stderr)
+                            await asyncio.sleep(backoff)
+                            continue
+                        break
+                    except httpx.RequestError as exc:
+                        print(f"[Gemini] Network error: {exc}", file=sys.stderr)
+                        return "AI_MENTOR_API_ERROR"
+                    
             if status_code < 200 or status_code >= 300:
                 print(f"[Gemini] Unexpected status: {status_code}", file=sys.stderr)
                 return "AI_MENTOR_API_ERROR"
@@ -1002,13 +961,10 @@ def _get_ai_mentorship(code: str, language: str, execution: dict, issues: List[d
         print(f"[Gemini] Error with AI Mentor: {err_msg}", file=sys.stderr)
         return "AI_MENTOR_DISABLED"
 
-def analyze_code(code: str, language: str = "python") -> Dict[str, Any]:
+async def analyze_code(code: str, language: str = "python") -> Dict[str, Any]:
     """
     Analyze source code and return a structured result.
-
-    For Python and JavaScript, this runs the code in a separate process to
-    capture output and runtime errors, and combines that with rule-based
-    static checks. Other languages currently return limited static feedback.
+    Runs subprocess execute functions in an isolated thread. 
     """
     if not isinstance(code, str):
         raise TypeError("code must be a string")
@@ -1017,19 +973,19 @@ def analyze_code(code: str, language: str = "python") -> Dict[str, Any]:
     lines = code.splitlines()
 
     if language == "python":
-        issues, execution = _analyze_python(code)
+        issues, execution = await asyncio.to_thread(_analyze_python, code)
     elif language in {"javascript", "js"}:
         language = "javascript"
-        issues, execution = _analyze_javascript(code)
+        issues, execution = await asyncio.to_thread(_analyze_javascript, code)
     elif language == "java":
-        issues, execution = _analyze_java(code)
+        issues, execution = await asyncio.to_thread(_analyze_java, code)
     elif language == "c":
-        issues, execution = _analyze_c(code)
+        issues, execution = await asyncio.to_thread(_analyze_c, code)
     elif language in {"cpp", "c++"}:
         language = "cpp"
-        issues, execution = _analyze_cpp(code)
+        issues, execution = await asyncio.to_thread(_analyze_cpp, code)
     else:
-        issues, execution = _analyze_language_not_yet_supported(language)
+        issues, execution = await asyncio.to_thread(_analyze_language_not_yet_supported, language)
 
     issues_dicts = [
         {"line": i.line, "severity": i.severity, "code": i.code, "message": i.message}
@@ -1039,7 +995,7 @@ def analyze_code(code: str, language: str = "python") -> Dict[str, Any]:
     error_details = execution.get("error")
     errors_from_issues = [i for i in issues_dicts if i["severity"] == "error"]
 
-    ai_mentor_feedback = _get_ai_mentorship(code, language, execution, issues_dicts)
+    ai_mentor_feedback = await _get_ai_mentorship(code, language, execution, issues_dicts)
 
     result: Dict[str, Any] = {
         "ok": True,

@@ -113,37 +113,42 @@ class TestErrorHelp:
 class TestAnalyzeCode:
     """Integration tests for the analyze_code function."""
     
-    def test_analyze_valid_python(self):
+    @pytest.mark.asyncio
+    async def test_analyze_valid_python(self):
         """analyze_code should successfully analyze valid Python."""
         code = 'x = 10\nprint(x)'
-        result = analyze_code(code, 'python')
+        result = await analyze_code(code, 'python')
         assert result['ok'] is True
         assert result['language'] == 'python'
         assert result['execution']['returncode'] == 0
     
-    def test_analyze_python_with_error(self):
+    @pytest.mark.asyncio
+    async def test_analyze_python_with_error(self):
         """analyze_code should detect runtime errors."""
         code = 'x = 10 / 0'  # ZeroDivisionError
-        result = analyze_code(code, 'python')
+        result = await analyze_code(code, 'python')
         assert result['ok'] is True  # ok=True, but execution has error
         assert result['execution']['returncode'] != 0 or result['execution']['error'] is not None
     
-    def test_analyze_invalid_language(self):
+    @pytest.mark.asyncio
+    async def test_analyze_invalid_language(self):
         """Unsupported languages should be marked as such."""
         code = 'print("hello")'
-        result = analyze_code(code, 'ruby')  # Not supported
+        result = await analyze_code(code, 'ruby')  # Not supported
         assert 'unsupported' in result['ai_mentor_feedback'].lower() or \
                any(i['code'] == 'LANGUAGE_UNSUPPORTED' for i in result['issues'])
     
-    def test_analyze_empty_code(self):
+    @pytest.mark.asyncio
+    async def test_analyze_empty_code(self):
         """analyze_code should handle empty code."""
-        result = analyze_code('', 'python')
+        result = await analyze_code('', 'python')
         assert result['summary']['line_count'] == 0
     
-    def test_analyze_result_structure(self):
+    @pytest.mark.asyncio
+    async def test_analyze_result_structure(self):
         """analyze_code result should have correct structure."""
         code = 'print("test")'
-        result = analyze_code(code, 'python')
+        result = await analyze_code(code, 'python')
         
         assert 'ok' in result
         assert 'language' in result
@@ -161,25 +166,28 @@ class TestAnalyzeCode:
 class TestPythonExecution:
     """Test Python code execution."""
     
-    def test_python_stdout_capture(self):
+    @pytest.mark.asyncio
+    async def test_python_stdout_capture(self):
         """Python stdout should be captured."""
         code = 'print("hello world")'
-        result = analyze_code(code, 'python')
+        result = await analyze_code(code, 'python')
         assert 'hello world' in result['execution']['stdout']
     
-    def test_python_timeout_detection(self):
+    @pytest.mark.asyncio
+    async def test_python_timeout_detection(self):
         """Infinite loops should timeout (with 1 second limit)."""
         code = 'while True: pass'
-        result = analyze_code(code, 'python')
+        result = await analyze_code(code, 'python')
         # The _run_python function has a 3.0 second default timeout
         # For this test, we just check that either timeout happened or error occurred
         assert (result['execution']['timed_out'] is True or 
                 result['execution']['error'] is not None)
     
-    def test_python_error_parsing(self):
+    @pytest.mark.asyncio
+    async def test_python_error_parsing(self):
         """RuntimeError should be parsed correctly."""
         code = 'x = undefined_variable'
-        result = analyze_code(code, 'python')
+        result = await analyze_code(code, 'python')
         assert result['execution']['error'] is not None
 
 
