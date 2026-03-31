@@ -353,7 +353,10 @@ export default function App() {
                                     const cleanedCode = newCode.replace(/\r\n/g, '\n').replace(/\r/g, '\n');
                                     setCode(cleanedCode);
                                 }}
-                                highlight={code => Prism.highlight(code, getPrismLanguage(language), language)}
+                                highlight={code => {
+                                    const grammar = getPrismLanguage(language);
+                                    return grammar ? Prism.highlight(code, grammar, language) : code;
+                                }}
                                 padding={24}
                                 style={{
                                     fontFamily: 'var(--font-mono)',
