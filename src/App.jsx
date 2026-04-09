@@ -97,11 +97,11 @@ const renderMarkdown = (text) => {
 };
 
 const DEFAULT_CODE = {
-    python: 'print("Hello World!")\n# Try making an intentional mistake here\n# my_var = 10 / 0',
-    javascript: 'console.log("Hello World!");\n// Try making an intentional mistake here\n// let x = undefined.property;',
-    java: 'public class Main {\n    public static void main(String[] args) {\n        System.out.println("Hello World!");\n        // Try making an intentional mistake here\n    }\n}',
-    c: '#include <stdio.h>\n\nint main() {\n    printf("Hello World!\\n");\n    // Try making an intentional mistake here\n    return 0;\n}',
-    cpp: '#include <iostream>\nusing namespace std;\n\nint main() {\n    cout << "Hello World!" << endl;\n    // Try making an intentional mistake here\n    return 0;\n}',
+    python: 'print("Hello World!")\n# Start coding below',
+    javascript: 'console.log("Hello World!");\n// Start coding below',
+    java: 'public class Main {\n    public static void main(String[] args) {\n        System.out.println("Hello World!");\n    }\n}',
+    c: '#include <stdio.h>\n\nint main() {\n    printf("Hello World!\\n");\n    return 0;\n}',
+    cpp: '#include <iostream>\nusing namespace std;\n\nint main() {\n    cout << "Hello World!" << endl;\n    return 0;\n}',
 };
 
 export default function App() {
