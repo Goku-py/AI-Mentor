@@ -186,9 +186,18 @@ def _line_based_checks(code: str) -> List[Issue]:
     return issues
 
 
-def _python_error_help(exc_type: str, message: str) -> Dict[str, Any]:
-    """Return explanation and suggestions for common Python runtime errors."""
+def _python_error_help(exc_type: str, message: str, difficulty: str = "beginner", line: Optional[int] = None) -> Dict[str, Any]:
+    """Return explanation and suggestions for common Python runtime errors.
+    
+    Args:
+        exc_type: The exception type name
+        message: The error message
+        difficulty: "beginner", "intermediate", or "advanced"
+        line: The line number where error occurred (for beginner difficulty)
+    """
     exc_type = exc_type or ""
+    
+    # Default beginner explanations
     explanation = "Your program raised a runtime error."
     suggestions: List[str] = [
         "Read the error message carefully and check the referenced line number.",
@@ -196,35 +205,95 @@ def _python_error_help(exc_type: str, message: str) -> Dict[str, Any]:
     ]
 
     if exc_type == "ZeroDivisionError":
-        explanation = "You attempted to divide by zero, which is not allowed in mathematics or Python."
-        suggestions = [
-            "Check the value of the denominator before dividing.",
-            "Guard the division with an `if denominator != 0:` condition.",
-        ]
+        if difficulty == "beginner":
+            explanation = "You attempted to divide by zero, which is not allowed in mathematics or Python."
+            if line:
+                explanation += f" Check line {line}."
+            suggestions = [
+                "Check the value of the denominator before dividing.",
+                "Guard the division with an `if denominator != 0:` condition.",
+            ]
+        elif difficulty == "intermediate":
+            explanation = "The code is attempting a division operation where the divisor equals zero."
+            suggestions = [
+                "Review the mathematical operation that's failing.",
+                "Add a conditional check before division operations.",
+            ]
+        else:  # advanced
+            explanation = "Division by zero"
+            suggestions = []
     elif exc_type == "NameError":
-        explanation = "Python tried to use a variable or name that has not been defined yet."
-        suggestions = [
-            "Make sure the variable is defined before you use it.",
-            "Check for typos in the variable or function name.",
-        ]
+        if difficulty == "beginner":
+            explanation = "Python tried to use a variable or name that has not been defined yet."
+            if line:
+                explanation += f" Look at line {line}."
+            suggestions = [
+                "Make sure the variable is defined before you use it.",
+                "Check for typos in the variable or function name.",
+            ]
+        elif difficulty == "intermediate":
+            explanation = "A variable or function is being referenced that hasn't been defined in the current scope."
+            suggestions = [
+                "Ensure all names are defined before use.",
+                "Check for scope issues.",
+            ]
+        else:  # advanced
+            explanation = "Undefined name reference"
+            suggestions = []
     elif exc_type == "TypeError":
-        explanation = "An operation or function was applied to a value of an inappropriate type."
-        suggestions = [
-            "Check the types of the variables used on the failing line.",
-            "Convert values to the expected type (for example, `int(...)` or `str(...)`).",
-        ]
+        if difficulty == "beginner":
+            explanation = "An operation or function was applied to a value of an inappropriate type."
+            if line:
+                explanation += f" Check the types on line {line}."
+            suggestions = [
+                "Check the types of the variables used on the failing line.",
+                "Convert values to the expected type (for example, `int(...)` or `str(...)`).",
+            ]
+        elif difficulty == "intermediate":
+            explanation = "An operation was performed on incompatible data types."
+            suggestions = [
+                "Review type compatibility for the operation being performed.",
+                "Consider type conversion if needed.",
+            ]
+        else:  # advanced
+            explanation = "Type mismatch"
+            suggestions = []
     elif exc_type == "IndexError":
-        explanation = "You tried to access a list (or similar container) at a position that does not exist."
-        suggestions = [
-            "Check the length of the list before indexing.",
-            "Remember that valid indices go from 0 up to `len(list) - 1`.",
-        ]
+        if difficulty == "beginner":
+            explanation = "You tried to access a list (or similar container) at a position that does not exist."
+            if line:
+                explanation += f" Review line {line}."
+            suggestions = [
+                "Check the length of the list before indexing.",
+                "Remember that valid indices go from 0 up to `len(list) - 1`.",
+            ]
+        elif difficulty == "intermediate":
+            explanation = "An index is out of bounds for the container being accessed."
+            suggestions = [
+                "Verify the container's size before indexing.",
+                "Check boundary conditions in loops.",
+            ]
+        else:  # advanced
+            explanation = "Index out of bounds"
+            suggestions = []
     elif exc_type == "KeyError":
-        explanation = "You tried to access a dictionary key that does not exist."
-        suggestions = [
-            "Use `in` to check whether a key exists before accessing it.",
-            "Use `dict.get(key, default)` if the key might be missing.",
-        ]
+        if difficulty == "beginner":
+            explanation = "You tried to access a dictionary key that does not exist."
+            if line:
+                explanation += f" Check line {line}."
+            suggestions = [
+                "Use `in` to check whether a key exists before accessing it.",
+                "Use `dict.get(key, default)` if the key might be missing.",
+            ]
+        elif difficulty == "intermediate":
+            explanation = "The code attempts to access a dictionary with a key that isn't present."
+            suggestions = [
+                "Check key existence before access.",
+                "Use defensive dictionary access methods.",
+            ]
+        else:  # advanced
+            explanation = "Missing dictionary key"
+            suggestions = []
 
     return {
         "type": exc_type,
@@ -234,7 +303,7 @@ def _python_error_help(exc_type: str, message: str) -> Dict[str, Any]:
     }
 
 
-def _parse_python_traceback(stderr: str) -> Dict[str, Any]:
+def _parse_python_traceback(stderr: str, difficulty: str = "beginner") -> Dict[str, Any]:
     """
     Extract error type, message and line number from a Python traceback.
     """
@@ -264,12 +333,12 @@ def _parse_python_traceback(stderr: str) -> Dict[str, Any]:
             exc_message = parts[1].strip()
             break
 
-    help_data = _python_error_help(str(exc_type) if exc_type else "", exc_message)
+    help_data = _python_error_help(str(exc_type) if exc_type else "", exc_message, difficulty=difficulty, line=line_number)
     help_data["line"] = line_number
     return help_data
 
 
-def _run_python(code: str, timeout: float = 3.0) -> Dict[str, Any]:
+def _run_python(code: str, timeout: float = 3.0, difficulty: str = "beginner") -> Dict[str, Any]:
     execution = _empty_execution()
 
     blocked_module = _blocked_python_import(code)
@@ -325,14 +394,23 @@ def _run_python(code: str, timeout: float = 3.0) -> Dict[str, Any]:
     execution["returncode"] = completed.returncode
 
     if completed.returncode != 0:
-        execution["error"] = _parse_python_traceback(execution["stderr"])
+        execution["error"] = _parse_python_traceback(execution["stderr"], difficulty=difficulty)
 
     return execution
 
 
-def _javascript_error_help(error_name: str, message: str) -> Dict[str, Any]:
-    """Return explanation and suggestions for common JavaScript runtime errors."""
+def _javascript_error_help(error_name: str, message: str, difficulty: str = "beginner", line: Optional[int] = None) -> Dict[str, Any]:
+    """Return explanation and suggestions for common JavaScript runtime errors.
+    
+    Args:
+        error_name: The error type name
+        message: The error message
+        difficulty: "beginner", "intermediate", or "advanced"
+        line: The line number where error occurred (for beginner difficulty)
+    """
     error_name = error_name or ""
+    
+    # Default beginner explanations
     explanation = "Your JavaScript program raised a runtime error."
     suggestions: List[str] = [
         "Read the error message carefully and check the referenced line number.",
@@ -340,23 +418,59 @@ def _javascript_error_help(error_name: str, message: str) -> Dict[str, Any]:
     ]
 
     if error_name == "ReferenceError":
-        explanation = "JavaScript tried to use a variable that does not exist in the current scope."
-        suggestions = [
-            "Make sure the variable is declared before it is used.",
-            "Check for typos in the variable or function name.",
-        ]
+        if difficulty == "beginner":
+            explanation = "JavaScript tried to use a variable that does not exist in the current scope."
+            if line:
+                explanation += f" Look at line {line}."
+            suggestions = [
+                "Make sure the variable is declared before it is used.",
+                "Check for typos in the variable or function name.",
+            ]
+        elif difficulty == "intermediate":
+            explanation = "A variable or function is being referenced that hasn't been defined in the current scope."
+            suggestions = [
+                "Ensure all names are declared before use.",
+                "Check for scope issues.",
+            ]
+        else:  # advanced
+            explanation = "Undefined identifier reference"
+            suggestions = []
     elif error_name == "TypeError":
-        explanation = "An operation was performed on a value of an unexpected type."
-        suggestions = [
-            "Check that objects and functions are what you expect before using them.",
-            "Guard property access with checks like `if (obj && obj.prop) { ... }`.",
-        ]
+        if difficulty == "beginner":
+            explanation = "An operation was performed on a value of an unexpected type."
+            if line:
+                explanation += f" Check line {line}."
+            suggestions = [
+                "Check that objects and functions are what you expect before using them.",
+                "Guard property access with checks like `if (obj && obj.prop) { ... }`.",
+            ]
+        elif difficulty == "intermediate":
+            explanation = "An operation was attempted on an incompatible type."
+            suggestions = [
+                "Verify type compatibility before operations.",
+                "Use type checks or guards.",
+            ]
+        else:  # advanced
+            explanation = "Type mismatch"
+            suggestions = []
     elif error_name == "SyntaxError":
-        explanation = "There is a mistake in the JavaScript syntax, so the engine cannot parse the code."
-        suggestions = [
-            "Look for missing brackets, parentheses, or commas near the reported location.",
-            "Use a code editor with syntax highlighting to spot the error more easily.",
-        ]
+        if difficulty == "beginner":
+            explanation = "There is a mistake in the JavaScript syntax, so the engine cannot parse the code."
+            if line:
+                explanation += f" Review line {line}."
+            suggestions = [
+                "Look for missing brackets, parentheses, or commas near the reported location.",
+                "Use a code editor with syntax highlighting to spot the error more easily.",
+            ]
+        elif difficulty == "intermediate":
+            explanation = "The code contains syntactic errors that prevent parsing."
+            suggestions = [
+                "Check bracket/paren/brace matching.",
+                "Look for missing punctuation.",
+            ]
+        else:  # advanced
+            explanation = "Syntax error"
+            suggestions = []
 
     return {
         "type": error_name,
@@ -366,7 +480,7 @@ def _javascript_error_help(error_name: str, message: str) -> Dict[str, Any]:
     }
 
 
-def _parse_node_error(stderr: str) -> Dict[str, Any]:
+def _parse_node_error(stderr: str, difficulty: str = "beginner") -> Dict[str, Any]:
     """
     Extract error type, message and (best-effort) line number from a Node.js error.
     """
@@ -396,12 +510,12 @@ def _parse_node_error(stderr: str) -> Dict[str, Any]:
             except ValueError:
                 pass
 
-    help_data = _javascript_error_help(str(error_name) if error_name else "", message)
+    help_data = _javascript_error_help(str(error_name) if error_name else "", message, difficulty=difficulty, line=line_number)
     help_data["line"] = line_number
     return help_data
 
 
-def _run_node(code: str, timeout: float = 3.0) -> Dict[str, Any]:
+def _run_node(code: str, timeout: float = 3.0, difficulty: str = "beginner") -> Dict[str, Any]:
     execution = _empty_execution()
 
     try:
@@ -447,12 +561,12 @@ def _run_node(code: str, timeout: float = 3.0) -> Dict[str, Any]:
     execution["returncode"] = completed.returncode
 
     if completed.returncode != 0:
-        execution["error"] = _parse_node_error(execution["stderr"])
+        execution["error"] = _parse_node_error(execution["stderr"], difficulty=difficulty)
 
     return execution
 
 
-def _analyze_python(code: str) -> Tuple[List[Issue], Dict[str, Any]]:
+def _analyze_python(code: str, difficulty: str = "beginner") -> Tuple[List[Issue], Dict[str, Any]]:
     issues: List[Issue] = []
     syntax_issues, syntax_exc = _check_syntax(code)
     issues.extend(syntax_issues)
@@ -460,10 +574,10 @@ def _analyze_python(code: str) -> Tuple[List[Issue], Dict[str, Any]]:
 
     execution = _empty_execution()
     if syntax_exc is None:
-        execution = _run_python(code)
+        execution = _run_python(code, difficulty=difficulty)
     else:
         # Mirror the syntax error into the execution block so the UI can show it
-        execution["error"] = _python_error_help("SyntaxError", str(syntax_exc))
+        execution["error"] = _python_error_help("SyntaxError", str(syntax_exc), difficulty=difficulty, line=syntax_exc.lineno or 1)
         execution["error"]["line"] = syntax_exc.lineno or 1
         execution["stderr"] = str(syntax_exc)
         execution["returncode"] = 1
@@ -471,10 +585,10 @@ def _analyze_python(code: str) -> Tuple[List[Issue], Dict[str, Any]]:
     return issues, execution
 
 
-def _analyze_javascript(code: str) -> Tuple[List[Issue], Dict[str, Any]]:
+def _analyze_javascript(code: str, difficulty: str = "beginner") -> Tuple[List[Issue], Dict[str, Any]]:
     # Reuse generic line-based checks for JavaScript as well
     issues = _line_based_checks(code)
-    execution = _run_node(code)
+    execution = _run_node(code, difficulty=difficulty)
     return issues, execution
 
 
@@ -924,7 +1038,7 @@ def _map_gemini_http_error(status_code: int, body_text: str, error_message: str)
     return "AI_MENTOR_API_ERROR"
 
 
-async def _get_ai_mentorship(code: str, language: str, execution: dict, issues: List[dict]) -> str:
+async def _get_ai_mentorship(code: str, language: str, execution: dict, issues: List[dict], difficulty: str = "beginner") -> str:
     api_key = _get_valid_gemini_api_key()
     if not api_key:
         return "AI_MENTOR_DISABLED"
@@ -971,19 +1085,48 @@ async def _get_ai_mentorship(code: str, language: str, execution: dict, issues: 
                 f"{i}: {line}" for i, line in enumerate(code.splitlines(), start=1)
             )
 
-            prompt = (
-                "You are a strict coding instructor. A student submitted code that has errors.\n"
-                "RULES YOU MUST FOLLOW:\n"
-                "- For EVERY issue you mention, you MUST quote the exact line of code that causes it "
-                "using the format: **Line N:** `<exact code on that line>`\n"
-                "- After the quote, explain in ONE plain sentence what is wrong.\n"
-                "- Then give ONE concise hint toward the fix (do NOT give the corrected code).\n"
-                "- If multiple errors exist, address each one separately.\n"
-                "- Be VERY BRIEF — max 3 sentences per error.\n\n"
-                f"Detected issues:\n{error_context}\n\n"
-                f"Student code ({language}) with line numbers:\n"
-                f"```\n{numbered_lines}\n```"
-            )
+            # Generate difficulty-specific prompt
+            if difficulty == "beginner":
+                prompt = (
+                    "You are a strict coding instructor helping a beginner. A student submitted code that has errors.\n"
+                    "RULES YOU MUST FOLLOW:\n"
+                    "- For EVERY issue you mention, you MUST reference the exact line number.\n"
+                    "- Use simple, plain language that a beginner can understand.\n"
+                    "- Explain what is wrong in simple terms.\n"
+                    "- Give a HINT toward the exact line or concept that needs fixing.\n"
+                    "- Do NOT give the corrected code.\n"
+                    "- Be VERY BRIEF — max 3 sentences per error.\n\n"
+                    f"Detected issues:\n{error_context}\n\n"
+                    f"Student code ({language}) with line numbers:\n"
+                    f"```\n{numbered_lines}\n```"
+                )
+            elif difficulty == "intermediate":
+                prompt = (
+                    "You are a coding instructor helping an intermediate student. A student submitted code that has errors.\n"
+                    "RULES YOU MUST FOLLOW:\n"
+                    "- Explain the CONCEPT or PRINCIPLE behind each error, not the specific line details.\n"
+                    "- Do NOT reference line numbers directly.\n"
+                    "- Help the student understand the underlying concept that needs to be applied.\n"
+                    "- Give a hint that guides without referencing specific lines.\n"
+                    "- Do NOT give the corrected code.\n"
+                    "- Be BRIEF and focused on conceptual understanding.\n\n"
+                    f"Detected issues:\n{error_context}\n\n"
+                    f"Student code ({language}) with line numbers:\n"
+                    f"```\n{numbered_lines}\n```"
+                )
+            else:  # advanced
+                prompt = (
+                    "You are a coding mentor for an advanced student. A student submitted code that has errors.\n"
+                    "RULES YOU MUST FOLLOW:\n"
+                    "- Identify ONLY the core concepts or principles that are wrong.\n"
+                    "- Do NOT provide line references, code quotes, or detailed explanations.\n"
+                    "- Be VERY TERSE — list only the concept names or brief concept descriptions.\n"
+                    "- Do NOT explain or give hints.\n"
+                    "- Do NOT reference specific code.\n\n"
+                    f"Detected issues:\n{error_context}\n\n"
+                    f"Student code ({language}) with line numbers:\n"
+                    f"```\n{numbered_lines}\n```"
+                )
 
             endpoint = (
                 "https://generativelanguage.googleapis.com/v1beta/"
@@ -1045,10 +1188,15 @@ async def _get_ai_mentorship(code: str, language: str, execution: dict, issues: 
         print(f"[Gemini] Error with AI Mentor: {err_msg}", file=sys.stderr)
         return "AI_MENTOR_DISABLED"
 
-async def analyze_code(code: str, language: str = "python") -> Dict[str, Any]:
+async def analyze_code(code: str, language: str = "python", difficulty: str = "beginner") -> Dict[str, Any]:
     """
     Analyze source code and return a structured result.
-    Runs subprocess execute functions in an isolated thread. 
+    Runs subprocess execute functions in an isolated thread.
+    
+    Args:
+        code: The source code to analyze
+        language: Programming language (python, javascript, java, c, cpp)
+        difficulty: "beginner", "intermediate", or "advanced"
     """
     if not isinstance(code, str):
         raise TypeError("code must be a string")
@@ -1057,10 +1205,10 @@ async def analyze_code(code: str, language: str = "python") -> Dict[str, Any]:
     lines = code.splitlines()
 
     if language == "python":
-        issues, execution = await asyncio.to_thread(_analyze_python, code)
+        issues, execution = await asyncio.to_thread(_analyze_python, code, difficulty)
     elif language in {"javascript", "js"}:
         language = "javascript"
-        issues, execution = await asyncio.to_thread(_analyze_javascript, code)
+        issues, execution = await asyncio.to_thread(_analyze_javascript, code, difficulty)
     elif language == "java":
         issues, execution = await asyncio.to_thread(_analyze_java, code)
     elif language == "c":
@@ -1079,7 +1227,7 @@ async def analyze_code(code: str, language: str = "python") -> Dict[str, Any]:
     error_details = execution.get("error")
     errors_from_issues = [i for i in issues_dicts if i["severity"] == "error"]
 
-    ai_mentor_feedback = await _get_ai_mentorship(code, language, execution, issues_dicts)
+    ai_mentor_feedback = await _get_ai_mentorship(code, language, execution, issues_dicts, difficulty=difficulty)
 
     result: Dict[str, Any] = {
         "ok": True,

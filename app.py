@@ -50,6 +50,9 @@ AVAILABLE_TOOLS = verify_tools()
 # error messages or the Gemini AI prompt (prevents prompt injection).
 ALLOWED_LANGUAGES = {"python", "javascript", "js", "java", "c", "cpp", "c++"}
 
+# Strictly allowlisted set of accepted difficulty values.
+ALLOWED_DIFFICULTIES = {"beginner", "intermediate", "advanced"}
+
 # ---------------------------------------------------------------------------
 # API v1 Blueprint
 # All public API endpoints live under /api/v1/. Static file serving and the
@@ -318,6 +321,7 @@ def analyze():
 
     code = payload.get("code")
     language = payload.get("language", "python")
+    difficulty = payload.get("difficulty", "beginner")
 
     if not isinstance(language, str) or language.lower() not in ALLOWED_LANGUAGES:
         return (
@@ -330,6 +334,18 @@ def analyze():
             400,
         )
     language = language.lower()
+
+    if not isinstance(difficulty, str) or difficulty.lower() not in ALLOWED_DIFFICULTIES:
+        return (
+            jsonify(
+                {
+                    "ok": False,
+                    "error": "Invalid difficulty. Supported values: beginner, intermediate, advanced.",
+                }
+            ),
+            400,
+        )
+    difficulty = difficulty.lower()
 
     if not isinstance(code, str) or not code.strip():
         return (
@@ -368,7 +384,7 @@ def analyze():
         )
 
     try:
-        result = asyncio.run(analyze_code(code=code, language=language))
+        result = asyncio.run(analyze_code(code=code, language=language, difficulty=difficulty))
         return jsonify(result), 200
     except Exception as exc:  # pragma: no cover - defensive
         app.logger.exception("Error during code analysis: %s", exc)
