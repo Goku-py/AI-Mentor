@@ -5,6 +5,7 @@
 [![Flask](https://img.shields.io/badge/Flask-3.x-000000?style=for-the-badge&logo=flask&logoColor=white)](https://flask.palletsprojects.com/)
 [![Gemini](https://img.shields.io/badge/Google%20Gemini-AI%20Powered-4285F4?style=for-the-badge&logo=google&logoColor=white)](https://ai.google.dev/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-ai--mentor.railway.app-brightgreen?style=for-the-badge)](https://ai-mentor.up.railway.app)
 
 > **AI Code Mentor** is a coding practice tool for students. You write code, run it, and if something goes wrong — the AI explains *what* went wrong and gives you a **hint** to fix it yourself. It never just hands you the answer.
 
@@ -51,7 +52,7 @@ Then open a terminal and run these commands:
 
 **Step 1 — Download the project**
 ```bash
-git clone https://github.com/your-username/ai-code-mentor.git
+git clone https://github.com/Goku-py/ai-code-mentor.git
 cd ai-code-mentor
 ```
 
@@ -101,7 +102,7 @@ Select a language, type some code, and click **Run Code**. That's it!
 | Java or C/C++ says "compiler not found" | You need to install the Java or C compiler separately and add it to your system PATH |
 | No AI hint appears after running code | Double-check your `.env` file has the correct API key with no extra spaces |
 
-Still stuck? [Open an issue on GitHub](https://github.com/your-username/ai-code-mentor/issues) and describe what happened.
+Still stuck? [Open an issue on GitHub](https://github.com/Goku-py/ai-code-mentor/issues) and describe what happened.
 
 ---
 
