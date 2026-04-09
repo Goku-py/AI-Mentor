@@ -581,6 +581,57 @@ body {
   outline: none;
 }
 
+/* Prism token overrides for light mode when using a dark base Prism theme */
+.light-mode .token.comment,
+.light-mode .token.prolog,
+.light-mode .token.doctype,
+.light-mode .token.cdata {
+  color: #6e7781;
+}
+
+.light-mode .token.punctuation {
+  color: #24292e;
+}
+
+.light-mode .token.property,
+.light-mode .token.tag,
+.light-mode .token.boolean,
+.light-mode .token.number,
+.light-mode .token.constant,
+.light-mode .token.symbol,
+.light-mode .token.deleted {
+  color: #cf222e;
+}
+
+.light-mode .token.selector,
+.light-mode .token.attr-name,
+.light-mode .token.string,
+.light-mode .token.char,
+.light-mode .token.builtin,
+.light-mode .token.inserted {
+  color: #0a7d2a;
+}
+
+.light-mode .token.operator,
+.light-mode .token.entity,
+.light-mode .token.url,
+.light-mode .language-css .token.string,
+.light-mode .style .token.string {
+  color: #0550ae;
+  background: transparent;
+}
+
+.light-mode .token.atrule,
+.light-mode .token.attr-value,
+.light-mode .token.keyword {
+  color: #8250df;
+}
+
+.light-mode .token.function,
+.light-mode .token.class-name {
+  color: #953800;
+}
+
 /* ===== RESPONSIVE / MOBILE LAYOUT ===== */
 @media (max-width: 768px) {
   body {

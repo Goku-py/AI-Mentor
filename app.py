@@ -1,6 +1,7 @@
 import os
 import re
 import sys
+import asyncio
 from flask import Blueprint, Flask, jsonify, redirect, request, send_from_directory
 from flask_cors import CORS
 from flask_limiter import Limiter
@@ -312,7 +313,7 @@ def debug_gemini_status():
 
 @v1_bp.route("/analyze", methods=["POST"])
 @limiter.limit("10 per minute; 100 per day")
-async def analyze():
+def analyze():
     payload = request.get_json(silent=True) or {}
 
     code = payload.get("code")
@@ -367,7 +368,7 @@ async def analyze():
         )
 
     try:
-        result = await analyze_code(code=code, language=language)
+        result = asyncio.run(analyze_code(code=code, language=language))
         return jsonify(result), 200
     except Exception as exc:  # pragma: no cover - defensive
         app.logger.exception("Error during code analysis: %s", exc)

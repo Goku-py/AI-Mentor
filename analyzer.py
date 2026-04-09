@@ -70,6 +70,55 @@ def _empty_execution() -> Dict[str, Any]:
     }
 
 
+def _sandbox_env() -> Dict[str, str]:
+    env = os.environ.copy()
+    # Best-effort network disabling through subprocess environment overrides.
+    env.update(
+        {
+            "NO_NETWORK": "1",
+            "http_proxy": "",
+            "https_proxy": "",
+            "HTTP_PROXY": "",
+            "HTTPS_PROXY": "",
+            "all_proxy": "",
+            "ALL_PROXY": "",
+            "no_proxy": "*",
+            "NO_PROXY": "*",
+        }
+    )
+    return env
+
+
+def _limit_resources_linux() -> None:
+    if not sys.platform.startswith("linux"):
+        return
+    import resource
+
+    memory_limit = 64 * 1024 * 1024
+    resource.setrlimit(resource.RLIMIT_AS, (memory_limit, memory_limit))
+    resource.setrlimit(resource.RLIMIT_CPU, (3, 3))
+
+
+def _blocked_python_import(code: str) -> Optional[str]:
+    blocked_modules = {"os", "sys", "subprocess"}
+    try:
+        tree = ast.parse(code)
+    except SyntaxError:
+        return None
+
+    for node in ast.walk(tree):
+        if isinstance(node, ast.Import):
+            for alias in node.names:
+                root_module = alias.name.split(".", 1)[0]
+                if root_module in blocked_modules:
+                    return root_module
+        elif isinstance(node, ast.ImportFrom) and node.module:
+            root_module = node.module.split(".", 1)[0]
+            if root_module in blocked_modules:
+                return root_module
+    return None
+
+
 def _check_syntax(code: str) -> Tuple[List[Issue], Optional[SyntaxError]]:
     issues: List[Issue] = []
     syntax_exc: Optional[SyntaxError] = None
@@ -223,13 +272,36 @@ def _parse_python_traceback(stderr: str) -> Dict[str, Any]:
 def _run_python(code: str, timeout: float = 3.0) -> Dict[str, Any]:
     execution = _empty_execution()
 
+    blocked_module = _blocked_python_import(code)
+    if blocked_module is not None:
+        execution["returncode"] = 1
+        execution["stderr"] = f"Blocked import: {blocked_module}"
+        execution["error"] = {
+            "type": "SecurityError",
+            "message": f"Import '{blocked_module}' is not allowed in this execution environment.",
+            "line": None,
+            "explanation": "This sandbox blocks modules that allow process and system access.",
+            "suggestions": [
+                "Remove the blocked import and use safer alternatives.",
+                "If you only need basic output, use print and pure-Python logic instead.",
+            ],
+        }
+        return execution
+
+    run_kwargs: Dict[str, Any] = {
+        "input": code,
+        "capture_output": True,
+        "text": True,
+        "timeout": timeout,
+        "env": _sandbox_env(),
+    }
+    if sys.platform.startswith("linux"):
+        run_kwargs["preexec_fn"] = _limit_resources_linux
+
     try:
         completed = subprocess.run(
             [sys.executable],
-            input=code,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
+            **run_kwargs,
         )
     except subprocess.TimeoutExpired as exc:
         execution["stdout"] = exc.stdout or ""
@@ -526,13 +598,28 @@ def _run_gcc(source_code: str, language_label: str, compiler: str, source_name: 
         with open(source_path, "w", encoding="utf-8") as f:
             f.write(source_code)
 
+        compile_kwargs: Dict[str, Any] = {
+            "cwd": tmp_dir,
+            "capture_output": True,
+            "text": True,
+            "timeout": timeout,
+            "env": _sandbox_env(),
+        }
+        run_kwargs: Dict[str, Any] = {
+            "cwd": tmp_dir,
+            "capture_output": True,
+            "text": True,
+            "timeout": timeout,
+            "env": _sandbox_env(),
+        }
+        if sys.platform.startswith("linux"):
+            compile_kwargs["preexec_fn"] = _limit_resources_linux
+            run_kwargs["preexec_fn"] = _limit_resources_linux
+
         try:
             compile_proc = subprocess.run(
                 [compiler, source_path, "-o", binary_path],
-                cwd=tmp_dir,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
+                **compile_kwargs,
             )
         except FileNotFoundError:
             execution["tool_missing"] = True
@@ -585,10 +672,7 @@ def _run_gcc(source_code: str, language_label: str, compiler: str, source_name: 
         try:
             run_proc = subprocess.run(
                 [binary_path],
-                cwd=tmp_dir,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
+                **run_kwargs,
             )
         except subprocess.TimeoutExpired as exc:
             execution["stdout"] = exc.stdout or ""

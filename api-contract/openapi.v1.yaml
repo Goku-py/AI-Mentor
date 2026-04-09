@@ -1,0 +1,136 @@
+openapi: 3.0.3
+info:
+  title: AI Mentor API
+  version: 1.0.0
+servers:
+  - url: /api/v1
+paths:
+  /health:
+    get:
+      summary: Service health and capabilities
+      responses:
+        "200":
+          description: Healthy response
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, available_tools, ai_mentor_enabled]
+                properties:
+                  status:
+                    type: string
+                  available_tools:
+                    type: object
+                    additionalProperties:
+                      type: boolean
+                  ai_mentor_enabled:
+                    type: boolean
+  /tools:
+    get:
+      summary: Available language toolchains
+      responses:
+        "200":
+          description: Tool availability
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [available, message]
+                properties:
+                  available:
+                    type: object
+                    additionalProperties:
+                      type: boolean
+                  message:
+                    type: string
+  /debug/gemini-status:
+    get:
+      summary: Gemini integration status
+      responses:
+        "200":
+          description: Diagnostic result
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [status, message]
+                properties:
+                  status:
+                    type: string
+                  message:
+                    type: string
+  /analyze:
+    post:
+      summary: Analyze code and return issues and execution output
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [code]
+              properties:
+                code:
+                  type: string
+                language:
+                  type: string
+      responses:
+        "200":
+          description: Successful analysis
+          content:
+            application/json:
+              schema:
+                type: object
+                required: [ok, language, summary, issues, execution, ai_mentor_feedback]
+                properties:
+                  ok:
+                    type: boolean
+                  language:
+                    type: string
+                  summary:
+                    type: object
+                    required: [line_count, issue_count]
+                    properties:
+                      line_count:
+                        type: integer
+                      issue_count:
+                        type: integer
+                  issues:
+                    type: array
+                    items:
+                      type: object
+                      required: [line, severity, code, message]
+                      properties:
+                        line:
+                          type: integer
+                        severity:
+                          type: string
+                        code:
+                          type: string
+                        message:
+                          type: string
+                  execution:
+                    type: object
+                    required: [stdout, stderr, returncode, timed_out, tool_missing]
+                    properties:
+                      stdout:
+                        type: string
+                      stderr:
+                        type: string
+                      returncode:
+                        type: integer
+                      timed_out:
+                        type: boolean
+                      tool_missing:
+                        type: boolean
+                      error:
+                        nullable: true
+                        oneOf:
+                          - type: "null"
+                          - type: object
+                  ai_mentor_feedback:
+                    type: string
+        "400":
+          description: Invalid request
+        "422":
+          description: Required toolchain unavailable

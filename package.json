@@ -12,7 +12,9 @@
     "preview": "vite preview",
     "start": "python app.py",
     "server": "python app.py",
-    "client": "vite"
+    "client": "vite",
+    "typecheck": "tsc --noEmit",
+    "test:e2e": "playwright test"
   },
   "dependencies": {
     "prismjs": "^1.30.0",
@@ -22,7 +24,11 @@
   },
   "devDependencies": {
     "@vitejs/plugin-react": "^5.1.4",
-    "vite": "^6.2.0",
-    "concurrently": "^8.2.2"
+    "concurrently": "^8.2.2",
+    "typescript": "^5.9.3",
+    "@types/react": "^18.3.23",
+    "@types/react-dom": "^18.3.7",
+    "@playwright/test": "^1.54.2",
+    "vite": "^6.2.0"
   }
 }

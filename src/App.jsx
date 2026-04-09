@@ -1,7 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import Editor from 'react-simple-code-editor';
 import Prism from 'prismjs';
-import 'prismjs/themes/prism.css';
 import 'prismjs/themes/prism-tomorrow.css';
 
 // Minimal inline SVG icons for styling
