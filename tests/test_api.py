@@ -13,6 +13,7 @@ from app import app
 def client():
     """Create Flask test client."""
     app.config['TESTING'] = True
+    app.config['RATELIMIT_ENABLED'] = False
     with app.test_client() as client:
         yield client
 
@@ -156,6 +157,75 @@ class TestAnalyzeEndpoint:
                                data='invalid json',
                                content_type='application/json')
         assert response.status_code == 400
+
+
+class TestHistoryEndpoint:
+    """Test session-backed analyze history endpoint."""
+
+    def test_history_empty_by_default(self, client):
+        response = client.get('/api/v1/history')
+        assert response.status_code == 200
+        data = json.loads(response.data)
+        assert data['ok'] is True
+        assert data['history'] == []
+
+    def test_history_appends_on_analyze(self, client):
+        response = client.post('/api/v1/analyze',
+                               data=json.dumps({
+                                   'code': 'print("hello world")',
+                                   'language': 'python'
+                               }),
+                               content_type='application/json',
+                               environ_overrides={'REMOTE_ADDR': '10.1.0.1'})
+        assert response.status_code == 200
+
+        history_response = client.get('/api/v1/history')
+        assert history_response.status_code == 200
+        data = json.loads(history_response.data)
+        assert len(data['history']) >= 1
+        latest = data['history'][-1]
+        assert 'timestamp' in latest
+        assert latest['language'] == 'python'
+        assert latest['code'] == 'print("hello world")'
+        assert isinstance(latest['had_error'], bool)
+
+    def test_history_returns_last_10_entries(self, client):
+        for idx in range(12):
+            response = client.post('/api/v1/analyze',
+                                   data=json.dumps({
+                                       'code': f'print({idx})',
+                                       'language': 'python'
+                                   }),
+                                   content_type='application/json',
+                                   environ_overrides={'REMOTE_ADDR': f'10.1.1.{idx + 1}'})
+            assert response.status_code == 200
+
+        history_response = client.get('/api/v1/history')
+        assert history_response.status_code == 200
+        data = json.loads(history_response.data)
+        assert len(data['history']) == 10
+        # Last item should correspond to the most recent call.
+        assert data['history'][-1]['code'] == 'print(11)'
+
+    def test_history_delete_clears_entries(self, client):
+        response = client.post('/api/v1/analyze',
+                               data=json.dumps({
+                                   'code': 'print("to clear")',
+                                   'language': 'python'
+                               }),
+                               content_type='application/json',
+                               environ_overrides={'REMOTE_ADDR': '10.2.0.1'})
+        assert response.status_code == 200
+
+        clear_response = client.delete('/api/v1/history')
+        assert clear_response.status_code == 200
+        clear_data = json.loads(clear_response.data)
+        assert clear_data['ok'] is True
+        assert clear_data['history'] == []
+
+        history_response = client.get('/api/v1/history')
+        data = json.loads(history_response.data)
+        assert data['history'] == []
 
 
 class TestRootEndpoint:

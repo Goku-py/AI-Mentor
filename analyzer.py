@@ -186,6 +186,110 @@ def _line_based_checks(code: str) -> List[Issue]:
     return issues
 
 
+def _detect_language_mismatch(code: str, selected_language: str) -> Optional[Dict[str, str]]:
+    """Detect likely language mismatch using marker-score heuristics."""
+    selected = (selected_language or "python").strip().lower()
+    if selected == "js":
+        selected = "javascript"
+    if selected == "c++":
+        selected = "cpp"
+
+    non_empty_lines = [line for line in code.splitlines() if re.search(r"\S", line)]
+
+    def rx(pattern: str) -> re.Pattern[str]:
+        return re.compile(pattern, re.IGNORECASE)
+
+    def semicolons_on_every_line(lines: List[str]) -> bool:
+        if not lines:
+            return False
+        pattern = rx(r"^\s*[^#].*;\s*(?://.*)?$")
+        return all(pattern.search(line) for line in lines)
+
+    def mismatch(detected: str, confidence: str = "high") -> Dict[str, str]:
+        return {
+            "detected": detected,
+            "selected": selected,
+            "confidence": confidence,
+        }
+
+    language_markers: Dict[str, List[re.Pattern[str]]] = {
+        "python": [
+            rx(r"\bdef\s+[A-Za-z_][A-Za-z0-9_]*\s*\("),
+            rx(r"\bprint\s*\("),
+            rx(r"\bimport\s+numpy\b"),
+            rx(r"\belif\b"),
+        ],
+        "javascript": [
+            rx(r"\bconsole\.log\s*\("),
+            rx(r"\bfunction\b"),
+            rx(r"\b(?:var|let|const)\s+[A-Za-z_$][\w$]*"),
+            rx(r"=>"),
+        ],
+        "java": [
+            rx(r"\bpublic\s+class\b"),
+            rx(r"\bSystem\.out\.println\s*\("),
+            rx(r"\bimport\s+java\."),
+        ],
+        "c": [
+            rx(r"#include\s*<stdio\.h>"),
+            rx(r"#include\s*<stdlib\.h>"),
+            rx(r"\bprintf\s*\("),
+            rx(r"\bscanf\s*\("),
+            rx(r"\bint\s+main\s*\(\s*(?:void|int\s+argc)?"),
+        ],
+        "cpp": [
+            rx(r"\bcout\s*<<"),
+            rx(r"\bcin\s*>>"),
+            rx(r"\bstd::"),
+            rx(r"\bclass\s+\w+"),
+            rx(r"\bnew\b"),
+            rx(r"\bnullptr\b"),
+            rx(r"\btemplate\b"),
+            rx(r"#include\s*<iostream>"),
+            rx(r"#include\s*<string>"),
+            rx(r"\b(?:public|private|protected)\s*:"),
+        ],
+    }
+
+    marker_count: Dict[str, int] = {
+        language: sum(1 for pattern in patterns if pattern.search(code))
+        for language, patterns in language_markers.items()
+    }
+
+    if semicolons_on_every_line(non_empty_lines):
+        marker_count["javascript"] += 1
+
+    cpp_markers = marker_count["cpp"]
+    c_markers = marker_count["c"]
+
+    if selected in {"c", "cpp"} and cpp_markers == 0 and c_markers == 0:
+        return None
+
+    if cpp_markers > 0:
+        detected = "cpp"
+    elif c_markers > 0:
+        detected = "c"
+    else:
+        non_c_family = {
+            "python": marker_count["python"],
+            "javascript": marker_count["javascript"],
+            "java": marker_count["java"],
+        }
+        detected = max(non_c_family, key=non_c_family.get)
+
+        if non_c_family[detected] == 0:
+            if selected in {"c", "cpp"}:
+                return None
+            if selected == "java":
+                return mismatch("unknown")
+            return None
+
+    if detected == selected:
+        return None
+
+    return mismatch(detected)
+
+
 def _python_error_help(exc_type: str, message: str, difficulty: str = "beginner", line: Optional[int] = None) -> Dict[str, Any]:
     """Return explanation and suggestions for common Python runtime errors.
     
@@ -1202,6 +1306,39 @@ async def analyze_code(code: str, language: str = "python", difficulty: str = "b
         raise TypeError("code must be a string")
 
     language = (language or "python").lower()
+    if language == "js":
+        language = "javascript"
+    if language == "c++":
+        language = "cpp"
+
+    mismatch = _detect_language_mismatch(code, language)
+    if mismatch:
+        detected = mismatch["detected"]
+        selected = mismatch["selected"]
+        return {
+            "ok": False,
+            "language": selected,
+            "mismatch": True,
+            "detected_language": detected,
+            "output": "",
+            "error": {
+                "type": "LanguageMismatch",
+                "message": f"You selected {selected} but your code looks like {detected}.",
+                "line": 1,
+                "explanation": "The code you wrote does not match the selected language.",
+                "suggestions": [
+                    f"Switch the language dropdown to {detected}",
+                    f"Or rewrite your code in {selected}.",
+                ],
+            },
+            "ai_mentor_feedback": (
+                "Language mismatch detected. "
+                f"You selected {selected} but your code appears to be written in {detected}. "
+                "Please switch the language dropdown or rewrite your code in the correct language."
+            ),
+            "issues": [],
+        }
+
     lines = code.splitlines()
 
     if language == "python":

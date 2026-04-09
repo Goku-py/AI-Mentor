@@ -2,7 +2,8 @@ import os
 import re
 import sys
 import asyncio
-from flask import Blueprint, Flask, jsonify, redirect, request, send_from_directory
+from datetime import datetime, timezone
+from flask import Blueprint, Flask, jsonify, redirect, request, send_from_directory, session
 from flask_cors import CORS
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -14,6 +15,11 @@ from analyzer import analyze_code, verify_tools
 load_dotenv()
 
 app = Flask(__name__, static_folder='dist', static_url_path='')
+app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", "dev-secret-key-change-me")
+
+SESSION_HISTORY_KEY = "analysis_history"
+SESSION_HISTORY_MAX_STORED = 50
+SESSION_HISTORY_MAX_RETURNED = 10
 
 # ProxyFix: trust exactly TRUSTED_PROXY_COUNT upstream reverse-proxy hops.
 # Set TRUSTED_PROXY_COUNT=1 on Railway / Render / Heroku so that
@@ -72,6 +78,24 @@ _BOT_UA_RE = re.compile(
     re.IGNORECASE,
 )
 _PROTECTED_PATHS = {"/api/v1/analyze", "/api/v1/debug/gemini-status"}
+
+
+def _record_history(language: str, code: str, had_error: bool) -> None:
+    history = session.get(SESSION_HISTORY_KEY, [])
+    if not isinstance(history, list):
+        history = []
+
+    history.append(
+        {
+            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "language": str(language or "python").lower(),
+            "code": (code or "")[:100],
+            "had_error": bool(had_error),
+        }
+    )
+
+    session[SESSION_HISTORY_KEY] = history[-SESSION_HISTORY_MAX_STORED:]
+    session.modified = True
 
 
 @app.before_request
@@ -176,6 +200,20 @@ def tools():
         "available": AVAILABLE_TOOLS,
         "message": "Tools marked as 'false' are not installed. See README for setup instructions."
     })
+
+
+@v1_bp.route("/history", methods=["GET", "DELETE"])
+def history():
+    if request.method == "DELETE":
+        session.pop(SESSION_HISTORY_KEY, None)
+        session.modified = True
+        return jsonify({"ok": True, "history": []}), 200
+
+    history_items = session.get(SESSION_HISTORY_KEY, [])
+    if not isinstance(history_items, list):
+        history_items = []
+
+    return jsonify({"ok": True, "history": history_items[-SESSION_HISTORY_MAX_RETURNED:]}), 200
 
 
 @v1_bp.route("/debug/gemini-status", methods=["GET"])
@@ -322,8 +360,11 @@ def analyze():
     code = payload.get("code")
     language = payload.get("language", "python")
     difficulty = payload.get("difficulty", "beginner")
+    code_for_history = code if isinstance(code, str) else ""
+    language_for_history = language if isinstance(language, str) else "python"
 
     if not isinstance(language, str) or language.lower() not in ALLOWED_LANGUAGES:
+        _record_history(language_for_history, code_for_history, had_error=True)
         return (
             jsonify(
                 {
@@ -336,6 +377,7 @@ def analyze():
     language = language.lower()
 
     if not isinstance(difficulty, str) or difficulty.lower() not in ALLOWED_DIFFICULTIES:
+        _record_history(language_for_history, code_for_history, had_error=True)
         return (
             jsonify(
                 {
@@ -348,6 +390,7 @@ def analyze():
     difficulty = difficulty.lower()
 
     if not isinstance(code, str) or not code.strip():
+        _record_history(language, code_for_history, had_error=True)
         return (
             jsonify(
                 {
@@ -360,6 +403,7 @@ def analyze():
 
     # Limit code size to prevent abuse (100KB limit)
     if len(code) > 102400:
+        _record_history(language, code, had_error=True)
         return (
             jsonify(
                 {
@@ -372,6 +416,7 @@ def analyze():
 
     # Check if language tools are available
     if language in AVAILABLE_TOOLS and not AVAILABLE_TOOLS[language]:
+        _record_history(language, code, had_error=True)
         return (
             jsonify(
                 {
@@ -385,9 +430,24 @@ def analyze():
 
     try:
         result = asyncio.run(analyze_code(code=code, language=language, difficulty=difficulty))
+        issues = result.get("issues", []) if isinstance(result, dict) else []
+        execution = result.get("execution", {}) if isinstance(result, dict) else {}
+        had_issue_error = any(
+            isinstance(issue, dict) and issue.get("severity") == "error"
+            for issue in issues
+        )
+        had_execution_error = (
+            isinstance(execution, dict)
+            and (
+                bool(execution.get("error"))
+                or int(execution.get("returncode", 0) or 0) != 0
+            )
+        )
+        _record_history(language, code, had_error=(had_issue_error or had_execution_error))
         return jsonify(result), 200
     except Exception as exc:  # pragma: no cover - defensive
         app.logger.exception("Error during code analysis: %s", exc)
+        _record_history(language, code, had_error=True)
         return (
             jsonify(
                 {

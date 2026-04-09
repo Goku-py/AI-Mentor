@@ -233,6 +233,11 @@ body {
   line-height: 1.6;
 }
 
+.error-line {
+  display: block;
+  background: rgba(248, 81, 73, 0.24);
+}
+
 .line-numbers {
   padding: 24px 16px;
   text-align: right;

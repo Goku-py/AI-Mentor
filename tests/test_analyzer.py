@@ -8,6 +8,7 @@ import pytest
 from analyzer import (
     analyze_code,
     verify_tools,
+    _detect_language_mismatch,
     _check_syntax,
     _line_based_checks,
     _python_error_help,
@@ -161,6 +162,34 @@ class TestAnalyzeCode:
         assert 'issue_count' in result['summary']
         
         assert isinstance(result['issues'], list)
+
+
+class TestLanguageMismatchDetection:
+    """Tests for language mismatch heuristics."""
+
+    def test_c_code_detected_as_c_not_cpp(self):
+        """C code with stdio/printf markers should detect C."""
+        code = '#include <stdio.h>\nint main(void) {\n    printf("hi\\n");\n    return 0;\n}'
+        mismatch = _detect_language_mismatch(code, 'python')
+        assert mismatch is not None
+        assert mismatch['detected'] == 'c'
+
+    def test_cpp_code_detected_as_cpp(self):
+        """C++ exclusive markers should detect C++."""
+        code = '#include <iostream>\nint main() {\n    std::cout << "hi";\n    return 0;\n}'
+        mismatch = _detect_language_mismatch(code, 'python')
+        assert mismatch is not None
+        assert mismatch['detected'] == 'cpp'
+
+    @pytest.mark.asyncio
+    async def test_c_code_submitted_as_cpp_reports_mismatch(self):
+        """C code under cpp selection should mismatch as C."""
+        code = '#include <stdio.h>\nint main(void) {\n    printf("hi\\n");\n    return 0;\n}'
+        result = await analyze_code(code, 'cpp')
+        assert result['ok'] is False
+        assert result['mismatch'] is True
+        assert result['detected_language'] == 'c'
+        assert result['language'] == 'cpp'
 
 
 class TestPythonExecution:

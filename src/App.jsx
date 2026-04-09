@@ -40,7 +40,7 @@ const TrashIcon = () => (
 );
 const FullscreenIcon = ({ exit = false }) => (
     exit ?
-        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M18 6h-6v6" /><path d="M6 18h6v-6" /></svg>
+        <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M3 9h6V3" /><path d="M21 9h-6V3" /><path d="M3 15h6v6" /><path d="M21 15h-6v6" /></svg>
         :
         <svg xmlns="http://www.w3.org/2000/svg" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="2" strokeLinecap="round" strokeLinejoin="round"><path d="M8 3H5a2 2 0 0 0-2 2v3" /><path d="M16 3h3a2 2 0 0 1 2 2v3" /><path d="M8 21H5a2 2 0 0 1-2-2v-3" /><path d="M16 21h3a2 2 0 0 0 2-2v-3" /></svg>
 );
@@ -108,6 +108,8 @@ export default function App() {
     const [code, setCode] = useState(DEFAULT_CODE.python);
     const [language, setLanguage] = useState('python');
     const [isAnalyzing, setIsAnalyzing] = useState(false);
+    const [errorLine, setErrorLine] = useState(null);
+    const editorWrapperRef = React.useRef(null);
 
     // UI state
     const [fontSize, setFontSize] = useState(() => {
@@ -123,6 +125,7 @@ export default function App() {
     const [errorMsg, setErrorMsg] = useState('');
     const [mentorFeedback, setMentorFeedback] = useState('');
     const [issues, setIssues] = useState([]);
+    const [mismatchInfo, setMismatchInfo] = useState(null);
 
     // persist settings
     React.useEffect(() => {
@@ -161,12 +164,30 @@ export default function App() {
         loadPrismLanguage();
     }, [language]);
 
+    useEffect(() => {
+        if (errorLine == null || !editorWrapperRef.current) return;
+
+        const textarea = editorWrapperRef.current.querySelector('textarea.code-textarea');
+        if (!textarea) return;
+
+        const computed = window.getComputedStyle(textarea);
+        const lineHeight = parseFloat(computed.lineHeight) || fontSize * 1.6;
+        const targetScrollTop = Math.max(
+            (errorLine - 1) * lineHeight - (textarea.clientHeight / 2) + (lineHeight / 2),
+            0
+        );
+
+        textarea.scrollTop = targetScrollTop;
+    }, [errorLine, fontSize]);
+
     const handleRun = async () => {
         setIsAnalyzing(true);
         setOutput('');
         setErrorMsg('');
         setMentorFeedback('AI Mentor analyzing...');
         setIssues([]);
+        setErrorLine(null);
+        setMismatchInfo(null);
 
         const API_URL = import.meta.env.VITE_API_URL || '';
 
@@ -192,7 +213,16 @@ export default function App() {
                 setIssues(data.issues);
             }
 
-            if (data.execution) {
+            if (data.mismatch) {
+                setMismatchInfo({
+                    selected: data.language || language,
+                    detected: data.detected_language || 'unknown'
+                });
+                setOutput(data.output || '');
+                setErrorMsg('');
+            }
+
+            if (!data.mismatch && data.execution) {
                 const stdout = data.execution.stdout || '';
                 const stderr = data.execution.stderr || '';
 
@@ -202,8 +232,16 @@ export default function App() {
                 if (data.execution.error || data.execution.returncode !== 0 || hasErrorIssues) {
                     setErrorMsg(stderr || data.execution.error?.message || "An execution error occurred.");
                 }
-            } else if (!data.ok) {
+            } else if (!data.mismatch && !data.ok) {
                 setErrorMsg(data.error || "Analysis failed.");
+            }
+
+            const apiErrorLine = data?.result?.error?.line;
+            if (apiErrorLine != null) {
+                const parsedLine = Number(apiErrorLine);
+                if (Number.isFinite(parsedLine) && parsedLine > 0) {
+                    setErrorLine(Math.floor(parsedLine));
+                }
             }
 
             // Fetch AI Mentor Feedback asynchronously in the background
@@ -223,9 +261,11 @@ export default function App() {
     const increaseFont = () => setFontSize(f => Math.min(f + 1, 36));
     const decreaseFont = () => setFontSize(f => Math.max(f - 1, 8));
     const toggleDarkMode = () => setDarkMode(d => !d);
-    const handleLanguageChange = (newLang) => {
+    const handleLanguageChange = (newLang, keepCurrentCode = false) => {
         setLanguage(newLang);
-        setCode(DEFAULT_CODE[newLang] || '');
+        if (!keepCurrentCode) {
+            setCode(DEFAULT_CODE[newLang] || '');
+        }
     };
 
     const cycleLanguage = () => {
@@ -326,7 +366,7 @@ export default function App() {
                     </button>
                     {/* additional controls */}
                     <button title="Clear output" onClick={clearOutput}><TrashIcon /></button>
-                    <button title="Toggle fullscreen" onClick={toggleFullscreen}><FullscreenIcon exit={isFullscreen} /></button>
+                    <button title={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'} onClick={toggleFullscreen}><FullscreenIcon exit={isFullscreen} /></button>
                     <button title="Share" onClick={handleShare}><ShareIcon /></button>
                 </div>
             </header>
@@ -344,7 +384,7 @@ export default function App() {
                                 <div key={i} style={{ height: '1.6em' }}>{i + 1}</div>
                             ))}
                         </div>
-                        <div style={{ flex: 1, position: 'relative', minHeight: 0 }}>
+                        <div style={{ flex: 1, position: 'relative', minHeight: 0 }} ref={editorWrapperRef}>
                             <Editor
                                 value={code}
                                 onValueChange={(newCode) => {
@@ -354,7 +394,11 @@ export default function App() {
                                 }}
                                 highlight={code => {
                                     const grammar = getPrismLanguage(language);
-                                    return grammar ? Prism.highlight(code, grammar, language) : code;
+                                    const highlighted = grammar ? Prism.highlight(code, grammar, language) : code;
+                                    return highlighted
+                                        .split('\n')
+                                        .map((line, idx) => `<span class="${errorLine === idx + 1 ? 'error-line' : ''}">${line || ' '}</span>`)
+                                        .join('\n');
                                 }}
                                 padding={24}
                                 style={{
@@ -378,6 +422,47 @@ export default function App() {
                             <TerminalIcon /> Standard Output & Code Issues
                         </div>
                         <div className="pane-content">
+                            {mismatchInfo && (
+                                <div
+                                    style={{
+                                        marginBottom: '1rem',
+                                        padding: '0.75rem',
+                                        border: '1px solid #facc15',
+                                        backgroundColor: '#fef9c3',
+                                        color: '#713f12',
+                                        borderRadius: '8px',
+                                        display: 'flex',
+                                        alignItems: 'center',
+                                        justifyContent: 'space-between',
+                                        gap: '0.75rem'
+                                    }}
+                                >
+                                    <span>
+                                        ⚠️ Language Mismatch: You selected {mismatchInfo.selected} but your code looks like {mismatchInfo.detected}.
+                                    </span>
+                                    {['python', 'javascript', 'java', 'c', 'cpp'].includes(mismatchInfo.detected) && mismatchInfo.detected !== language && (
+                                        <button
+                                            onClick={() => {
+                                                handleLanguageChange(mismatchInfo.detected, true);
+                                                setMismatchInfo(null);
+                                            }}
+                                            style={{
+                                                border: '1px solid #ca8a04',
+                                                backgroundColor: '#fef08a',
+                                                color: '#713f12',
+                                                borderRadius: '6px',
+                                                padding: '0.35rem 0.65rem',
+                                                cursor: 'pointer',
+                                                fontWeight: 600,
+                                                whiteSpace: 'nowrap'
+                                            }}
+                                        >
+                                            Switch to {mismatchInfo.detected}
+                                        </button>
+                                    )}
+                                </div>
+                            )}
+
                             {!output && !errorMsg && issues.length === 0 && (
                                 <div className="placeholder-text">Outputs and issues will appear here when you run code.</div>
                             )}
