@@ -5,3 +5,4 @@ flask-limiter>=3.9.0
 gunicorn>=23.0.0
 httpx>=0.28.1
 asgiref>=3.8.1
+docker>=7.1.0

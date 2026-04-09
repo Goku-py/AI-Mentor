@@ -16,6 +16,13 @@ from typing import Any, Dict, List, Optional, Tuple
 import httpx
 import asyncio
 
+try:
+    import docker
+    from docker.errors import APIError, ContainerError, DockerException
+except ImportError:
+    docker = None
+    APIError = ContainerError = DockerException = Exception
+
 
 @dataclass
 class Issue:
@@ -97,6 +104,186 @@ def _limit_resources_linux() -> None:
     memory_limit = 64 * 1024 * 1024
     resource.setrlimit(resource.RLIMIT_AS, (memory_limit, memory_limit))
     resource.setrlimit(resource.RLIMIT_CPU, (3, 3))
+
+
+def run_in_sandbox(code: str, language: str, image: str, cmd: Any, timeout: int = 10) -> str:
+    execution = _empty_execution()
+    execution["returncode"] = -1
+
+    language_key = (language or "").strip().lower()
+    source_names = {
+        "python": "main.py",
+        "javascript": "main.js",
+        "node": "main.js",
+        "c": "main.c",
+        "cpp": "main.cpp",
+    }
+    main_class = "Main"
+    if language_key == "java":
+        match = re.search(r"public\s+(?:final\s+)?class\s+(\w+)", code)
+        if match:
+            main_class = match.group(1)
+    source_name = source_names.get(language_key, f"{main_class}.java" if language_key == "java" else "main.txt")
+
+    timeout_seconds = max(1, int(timeout))
+    command = cmd
+    if isinstance(cmd, (list, tuple)):
+        command = [
+            part.format(
+                source=f"/workspace/{source_name}",
+                output="/tmp/program",
+                classes="/tmp/classes",
+                main_class=main_class,
+            )
+            for part in cmd
+        ]
+
+    try:
+        with tempfile.TemporaryDirectory() as tmp_dir:
+            source_path = os.path.join(tmp_dir, source_name)
+            with open(source_path, "w", encoding="utf-8") as f:
+                f.write(code)
+
+            if docker is None:
+                execution["tool_missing"] = True
+                execution["stderr"] = "Docker SDK is not installed on the server."
+                execution["error"] = {
+                    "type": "DockerUnavailable",
+                    "message": "Docker SDK is not installed on the server.",
+                    "line": None,
+                    "explanation": "The server cannot run code in a Docker sandbox until the Docker Python SDK is installed.",
+                    "suggestions": [
+                        "Install the docker Python package and restart the server.",
+                        "Ensure the Docker daemon is available on the host machine.",
+                    ],
+                }
+                run_in_sandbox.last_result = execution
+                return execution["stderr"]
+
+            client = docker.from_env()
+            container = None
+            try:
+                container = client.containers.run(
+                    image=image,
+                    command=command,
+                    working_dir="/workspace",
+                    volumes={tmp_dir: {"bind": "/workspace", "mode": "ro"}},
+                    network_disabled=True,
+                    mem_limit="64m",
+                    cpu_quota=50000,
+                    read_only=True,
+                    remove=True,
+                    stdout=True,
+                    stderr=True,
+                    detach=True,
+                    tmpfs={"/tmp": "rw,nosuid,size=64m"},
+                )
+
+                deadline = time.monotonic() + timeout_seconds
+                timed_out = False
+                while True:
+                    container.reload()
+                    state = container.attrs.get("State", {}) if isinstance(container.attrs, dict) else {}
+                    if not state.get("Running", False):
+                        execution["returncode"] = int(state.get("ExitCode", 0) or 0)
+                        break
+                    if time.monotonic() >= deadline:
+                        timed_out = True
+                        try:
+                            container.kill()
+                        except APIError:
+                            pass
+                        container.reload()
+                        state = container.attrs.get("State", {}) if isinstance(container.attrs, dict) else {}
+                        execution["returncode"] = int(state.get("ExitCode", -1) or -1)
+                        execution["timed_out"] = True
+                        execution["error"] = {
+                            "type": "Timeout",
+                            "message": "Program execution took too long and was stopped (possible infinite loop or heavy computation).",
+                            "line": None,
+                            "explanation": "The program did not finish within the allowed time limit.",
+                            "suggestions": [
+                                "Check for infinite loops or very slow operations.",
+                                "Try running a smaller piece of the program or simplifying the logic.",
+                            ],
+                        }
+                        break
+                    time.sleep(0.1)
+
+                try:
+                    stdout_bytes = container.logs(stdout=True, stderr=False)
+                except APIError:
+                    stdout_bytes = b""
+                try:
+                    stderr_bytes = container.logs(stdout=False, stderr=True)
+                except APIError:
+                    stderr_bytes = b""
+
+                stdout_text = stdout_bytes.decode("utf-8", errors="replace") if isinstance(stdout_bytes, bytes) else str(stdout_bytes or "")
+                stderr_text = stderr_bytes.decode("utf-8", errors="replace") if isinstance(stderr_bytes, bytes) else str(stderr_bytes or "")
+
+                execution["stdout"] = stdout_text
+                execution["stderr"] = stderr_text
+                if execution["returncode"] == -1 and not timed_out:
+                    execution["returncode"] = 0
+
+                run_in_sandbox.last_result = execution
+                return execution["stderr"] if execution["returncode"] != 0 else execution["stdout"]
+            except ContainerError as exc:
+                stdout_text = ""
+                stderr_text = ""
+                if getattr(exc, "stdout", None) is not None:
+                    stdout_value = exc.stdout
+                    stdout_text = stdout_value.decode("utf-8", errors="replace") if isinstance(stdout_value, bytes) else str(stdout_value)
+                if getattr(exc, "stderr", None) is not None:
+                    stderr_value = exc.stderr
+                    stderr_text = stderr_value.decode("utf-8", errors="replace") if isinstance(stderr_value, bytes) else str(stderr_value)
+                execution["stdout"] = stdout_text
+                execution["stderr"] = stderr_text or stdout_text or str(exc)
+                execution["returncode"] = int(getattr(exc, "exit_status", -1) or -1)
+                execution["error"] = {
+                    "type": "DockerContainerError",
+                    "message": execution["stderr"] or "Docker container execution failed.",
+                    "line": None,
+                    "explanation": "The Docker container returned an execution error.",
+                    "suggestions": [
+                        "Review the container stderr for the first failing command.",
+                        "Check that the requested Docker image is available and runnable.",
+                    ],
+                }
+                run_in_sandbox.last_result = execution
+                return execution["stderr"]
+            except (APIError, DockerException) as exc:
+                execution["stderr"] = str(exc)
+                execution["error"] = {
+                    "type": "DockerAPIError",
+                    "message": str(exc),
+                    "line": None,
+                    "explanation": "The Docker daemon or client returned an API error while starting the sandbox.",
+                    "suggestions": [
+                        "Verify that Docker is running on the host machine.",
+                        "Check whether the requested image can be pulled and started.",
+                    ],
+                }
+                run_in_sandbox.last_result = execution
+                return execution["stderr"]
+    except (APIError, DockerException) as exc:
+        execution["stderr"] = str(exc)
+        execution["error"] = {
+            "type": "DockerAPIError",
+            "message": str(exc),
+            "line": None,
+            "explanation": "The Docker daemon or client returned an API error while starting the sandbox.",
+            "suggestions": [
+                "Verify that Docker is running on the host machine.",
+                "Check whether the requested image can be pulled and started.",
+            ],
+        }
+    run_in_sandbox.last_result = execution
+    return execution["stderr"]
+
+
+run_in_sandbox.last_result = _empty_execution()
 
 
 def _blocked_python_import(code: str) -> Optional[str]:
@@ -461,43 +648,10 @@ def _run_python(code: str, timeout: float = 3.0, difficulty: str = "beginner") -
         }
         return execution
 
-    run_kwargs: Dict[str, Any] = {
-        "input": code,
-        "capture_output": True,
-        "text": True,
-        "timeout": timeout,
-        "env": _sandbox_env(),
-    }
-    if sys.platform.startswith("linux"):
-        run_kwargs["preexec_fn"] = _limit_resources_linux
+    run_in_sandbox(code, "python", "python:3.11-slim", ["python", "{source}"], timeout=10)
+    execution = dict(run_in_sandbox.last_result)
 
-    try:
-        completed = subprocess.run(
-            [sys.executable],
-            **run_kwargs,
-        )
-    except subprocess.TimeoutExpired as exc:
-        execution["stdout"] = exc.stdout or ""
-        execution["stderr"] = exc.stderr or ""
-        execution["returncode"] = -1
-        execution["timed_out"] = True
-        execution["error"] = {
-            "type": "Timeout",
-            "message": "Program execution took too long and was stopped (possible infinite loop or heavy computation).",
-            "line": None,
-            "explanation": "The program did not finish within the allowed time limit.",
-            "suggestions": [
-                "Check for infinite loops or very slow operations.",
-                "Try running a smaller piece of the program or simplifying the logic.",
-            ],
-        }
-        return execution
-
-    execution["stdout"] = completed.stdout or ""
-    execution["stderr"] = completed.stderr or ""
-    execution["returncode"] = completed.returncode
-
-    if completed.returncode != 0:
+    if execution["returncode"] != 0 and not execution["error"] and execution["stderr"]:
         execution["error"] = _parse_python_traceback(execution["stderr"], difficulty=difficulty)
 
     return execution
@@ -622,49 +776,10 @@ def _parse_node_error(stderr: str, difficulty: str = "beginner") -> Dict[str, An
 def _run_node(code: str, timeout: float = 3.0, difficulty: str = "beginner") -> Dict[str, Any]:
     execution = _empty_execution()
 
-    try:
-        completed = subprocess.run(
-            ["node"],
-            input=code,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-    except FileNotFoundError:
-        execution["tool_missing"] = True
-        execution["error"] = {
-            "type": "NodeNotFound",
-            "message": "Node.js runtime ('node') was not found on the server.",
-            "line": None,
-            "explanation": "The server cannot execute JavaScript code because Node.js is not installed or not on PATH.",
-            "suggestions": [
-                "Install Node.js and make sure the 'node' command is available in your terminal.",
-                "After installing, restart the server and try again.",
-            ],
-        }
-        return execution
-    except subprocess.TimeoutExpired as exc:
-        execution["stdout"] = exc.stdout or ""
-        execution["stderr"] = exc.stderr or ""
-        execution["returncode"] = -1
-        execution["timed_out"] = True
-        execution["error"] = {
-            "type": "Timeout",
-            "message": "Program execution took too long and was stopped (possible infinite loop or heavy computation).",
-            "line": None,
-            "explanation": "The program did not finish within the allowed time limit.",
-            "suggestions": [
-                "Check for infinite loops or very slow operations.",
-                "Try running a smaller piece of the program or simplifying the logic.",
-            ],
-        }
-        return execution
+    run_in_sandbox(code, "javascript", "node:18-slim", ["node", "{source}"], timeout=10)
+    execution = dict(run_in_sandbox.last_result)
 
-    execution["stdout"] = completed.stdout or ""
-    execution["stderr"] = completed.stderr or ""
-    execution["returncode"] = completed.returncode
-
-    if completed.returncode != 0:
+    if execution["returncode"] != 0 and not execution["error"] and execution["stderr"]:
         execution["error"] = _parse_node_error(execution["stderr"], difficulty=difficulty)
 
     return execution
@@ -808,122 +923,43 @@ def _run_gcc(source_code: str, language_label: str, compiler: str, source_name: 
     """
     compile_issues: List[Issue] = []
     execution = _empty_execution()
+    run_in_sandbox(source_code, language_label, "gcc:12", [
+        compiler,
+        "{source}",
+        "-o",
+        "{output}",
+    ], timeout=10)
+    execution = dict(run_in_sandbox.last_result)
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        source_path = os.path.join(tmp_dir, source_name)
-        binary_path = os.path.join(tmp_dir, "program")
+    if execution["returncode"] != 0:
+        if not execution["error"] and execution["stderr"]:
+            compile_issues.extend(_parse_gcc_output(execution["stderr"], language_label))
+            execution["error"] = {
+                "type": "CompileError",
+                "message": "Compilation failed. See errors below.",
+                "line": None,
+                "explanation": f"The {language_label.upper()} compiler reported one or more errors.",
+                "suggestions": [
+                    "Read each compiler error from top to bottom; often the first message is the most important.",
+                    "Fix the earliest error, then recompile to see if later errors disappear.",
+                ],
+            }
+        return compile_issues, execution
 
-        with open(source_path, "w", encoding="utf-8") as f:
-            f.write(source_code)
+    run_in_sandbox(source_code, language_label, "gcc:12", ["{output}"], timeout=10)
+    execution = dict(run_in_sandbox.last_result)
 
-        compile_kwargs: Dict[str, Any] = {
-            "cwd": tmp_dir,
-            "capture_output": True,
-            "text": True,
-            "timeout": timeout,
-            "env": _sandbox_env(),
+    if execution["returncode"] != 0 and not execution["error"]:
+        execution["error"] = {
+            "type": "RuntimeError",
+            "message": "The program exited with a non-zero status code.",
+            "line": None,
+            "explanation": "A non-zero exit code usually means the program hit a runtime error such as division by zero, invalid memory access, or an explicit `return 1`.",
+            "suggestions": [
+                "Add print statements before the suspected failing line to see which values are being used.",
+                "Check for invalid array indices, null pointers, or divisions where the denominator may be zero.",
+            ],
         }
-        run_kwargs: Dict[str, Any] = {
-            "cwd": tmp_dir,
-            "capture_output": True,
-            "text": True,
-            "timeout": timeout,
-            "env": _sandbox_env(),
-        }
-        if sys.platform.startswith("linux"):
-            compile_kwargs["preexec_fn"] = _limit_resources_linux
-            run_kwargs["preexec_fn"] = _limit_resources_linux
-
-        try:
-            compile_proc = subprocess.run(
-                [compiler, source_path, "-o", binary_path],
-                **compile_kwargs,
-            )
-        except FileNotFoundError:
-            execution["tool_missing"] = True
-            execution["error"] = {
-                "type": f"{compiler}_NotFound",
-                "message": f"Compiler '{compiler}' was not found on the server.",
-                "line": None,
-                "explanation": f"The server cannot compile {language_label.upper()} code because '{compiler}' is not installed or not on PATH.",
-                "suggestions": [
-                    f"Install {compiler} (for example via MSYS2/MinGW or TDM-GCC) and ensure it is on your PATH.",
-                    "After installing, restart the server and try again.",
-                ],
-            }
-            return compile_issues, execution
-        except subprocess.TimeoutExpired as exc:
-            execution["stdout"] = exc.stdout or ""
-            execution["stderr"] = exc.stderr or ""
-            execution["returncode"] = -1
-            execution["timed_out"] = True
-            execution["error"] = {
-                "type": "Timeout",
-                "message": "Compilation took too long and was stopped.",
-                "line": None,
-                "explanation": "The compiler did not finish within the allowed time limit.",
-                "suggestions": [
-                    "Check for extremely large source code or complex templates/macros.",
-                    "Try simplifying the program or compiling a smaller piece.",
-                ],
-            }
-            return compile_issues, execution
-
-        if compile_proc.returncode != 0:
-            execution["stderr"] = compile_proc.stderr or ""
-            execution["returncode"] = compile_proc.returncode
-            compile_issues.extend(_parse_gcc_output(compile_proc.stderr or "", language_label))
-            if not execution["error"]:
-                execution["error"] = {
-                    "type": "CompileError",
-                    "message": "Compilation failed. See errors below.",
-                    "line": None,
-                    "explanation": f"The {language_label.upper()} compiler reported one or more errors.",
-                    "suggestions": [
-                        "Read each compiler error from top to bottom; often the first message is the most important.",
-                        "Fix the earliest error, then recompile to see if later errors disappear.",
-                    ],
-                }
-            return compile_issues, execution
-
-        # Run the compiled program
-        try:
-            run_proc = subprocess.run(
-                [binary_path],
-                **run_kwargs,
-            )
-        except subprocess.TimeoutExpired as exc:
-            execution["stdout"] = exc.stdout or ""
-            execution["stderr"] = exc.stderr or ""
-            execution["returncode"] = -1
-            execution["timed_out"] = True
-            execution["error"] = {
-                "type": "Timeout",
-                "message": "Program execution took too long and was stopped (possible infinite loop or heavy computation).",
-                "line": None,
-                "explanation": "The program did not finish within the allowed time limit.",
-                "suggestions": [
-                    "Check for infinite loops or very slow operations.",
-                    "Try running a smaller piece of the program or simplifying the logic.",
-                ],
-            }
-            return compile_issues, execution
-
-        execution["stdout"] = run_proc.stdout or ""
-        execution["stderr"] = run_proc.stderr or ""
-        execution["returncode"] = run_proc.returncode
-
-        if run_proc.returncode != 0 and not execution["error"]:
-            execution["error"] = {
-                "type": "RuntimeError",
-                "message": "The program exited with a non-zero status code.",
-                "line": None,
-                "explanation": "A non-zero exit code usually means the program hit a runtime error such as division by zero, invalid memory access, or an explicit `return 1`.",
-                "suggestions": [
-                    "Add print statements before the suspected failing line to see which values are being used.",
-                    "Check for invalid array indices, null pointers, or divisions where the denominator may be zero.",
-                ],
-            }
 
     return compile_issues, execution
 
@@ -950,115 +986,39 @@ def _analyze_java(code: str, timeout: float = 3.0) -> Tuple[List[Issue], Dict[st
     match = re.search(r'public\s+(?:final\s+)?class\s+(\w+)', code)
     class_name = match.group(1) if match else "Main"
 
-    with tempfile.TemporaryDirectory() as tmp_dir:
-        source_path = os.path.join(tmp_dir, f"{class_name}.java")
-        with open(source_path, "w", encoding="utf-8") as f:
-            f.write(code)
+    run_in_sandbox(code, "java", "openjdk:17-slim", [
+        "sh",
+        "-lc",
+        "mkdir -p {classes} && javac -d {classes} {source}",
+    ], timeout=10)
+    execution = dict(run_in_sandbox.last_result)
 
-        try:
-            compile_proc = subprocess.run(
-                ["javac", source_path],
-                cwd=tmp_dir,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
-        except FileNotFoundError:
-            execution["tool_missing"] = True
-            execution["error"] = {
-                "type": "JavacNotFound",
-                "message": "Java compiler ('javac') was not found on the server.",
-                "line": None,
-                "explanation": "The server cannot compile Java code because the JDK tools are not installed or not on PATH.",
-                "suggestions": [
-                    "Install a JDK (for example Temurin or Oracle JDK) and ensure 'javac' is on your PATH.",
-                    "After installing, restart the server and try again.",
-                ],
-            }
-            return style_issues, execution
-        except subprocess.TimeoutExpired as exc:
-            execution["stdout"] = exc.stdout or ""
-            execution["stderr"] = exc.stderr or ""
-            execution["returncode"] = -1
-            execution["timed_out"] = True
-            execution["error"] = {
-                "type": "Timeout",
-                "message": "Java compilation took too long and was stopped.",
-                "line": None,
-                "explanation": "The Java compiler did not finish within the allowed time limit.",
-                "suggestions": [
-                    "Check for extremely large source files or complex generics.",
-                    "Try simplifying the program or compiling a smaller piece.",
-                ],
-            }
-            return style_issues, execution
-
-        if compile_proc.returncode != 0:
-            stderr = compile_proc.stderr or ""
-            execution["stderr"] = stderr
-            execution["returncode"] = compile_proc.returncode
+    if execution["returncode"] != 0:
+        stderr = execution["stderr"]
+        if not execution["error"] and stderr:
             compile_issues.extend(_parse_java_compile_output(stderr))
-            if not execution["error"]:
-                execution["error"] = {
-                    "type": "CompileError",
-                    "message": "Java compilation failed. See errors below.",
-                    "line": None,
-                    "explanation": "The Java compiler reported one or more errors.",
-                    "suggestions": [
-                        "Fix the first error reported by javac; later errors may be side effects.",
-                        "Ensure your public class name matches the file name (here: Main).",
-                    ],
-                }
-            issues = style_issues + compile_issues
-            return issues, execution
-
-        # If compilation succeeded, try to run the program.
-        try:
-            run_proc = subprocess.run(
-                ["java", class_name],
-                cwd=tmp_dir,
-                capture_output=True,
-                text=True,
-                timeout=timeout,
-            )
-        except FileNotFoundError:
-            execution["tool_missing"] = True
             execution["error"] = {
-                "type": "JavaRuntimeNotFound",
-                "message": "Java runtime ('java') was not found on the server.",
+                "type": "CompileError",
+                "message": "Java compilation failed. See errors below.",
                 "line": None,
-                "explanation": "The server cannot run Java programs because the Java runtime is not installed or not on PATH.",
+                "explanation": "The Java compiler reported one or more errors.",
                 "suggestions": [
-                    "Install a JDK/JRE and ensure the 'java' command is available.",
-                    "After installing, restart the server and try again.",
+                    "Fix the first error reported by javac; later errors may be side effects.",
+                    "Ensure your public class name matches the file name (here: Main).",
                 ],
             }
-            issues = style_issues + compile_issues
-            return issues, execution
-        except subprocess.TimeoutExpired as exc:
-            execution["stdout"] = exc.stdout or ""
-            execution["stderr"] = exc.stderr or ""
-            execution["returncode"] = -1
-            execution["timed_out"] = True
-            execution["error"] = {
-                "type": "Timeout",
-                "message": "Java program execution took too long and was stopped (possible infinite loop or heavy computation).",
-                "line": None,
-                "explanation": "The program did not finish within the allowed time limit.",
-                "suggestions": [
-                    "Check for infinite loops or very slow operations.",
-                    "Try running a smaller piece of the program or simplifying the logic.",
-                ],
-            }
-            issues = style_issues + compile_issues
-            return issues, execution
+        issues = style_issues + compile_issues
+        return issues, execution
 
-        execution["stdout"] = run_proc.stdout or ""
-        execution["stderr"] = run_proc.stderr or ""
-        execution["returncode"] = run_proc.returncode
+    run_in_sandbox(code, "java", "openjdk:17-slim", [
+        "sh",
+        "-lc",
+        "java -cp {classes} {main_class}",
+    ], timeout=10)
+    execution = dict(run_in_sandbox.last_result)
 
-        if run_proc.returncode != 0:
-            execution["error"] = _parse_java_runtime_error(execution["stderr"])
+    if execution["returncode"] != 0 and not execution["error"] and execution["stderr"]:
+        execution["error"] = _parse_java_runtime_error(execution["stderr"])
 
     issues = style_issues + compile_issues
     return issues, execution
