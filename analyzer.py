@@ -233,7 +233,27 @@ def run_in_sandbox(code: str, language: str, image: str, cmd: Any, timeout: int 
                 run_in_sandbox.last_result = execution
                 return execution["stderr"]
 
-            client = docker.from_env()
+            try:
+                client = docker.from_env()
+            except Exception as docker_err:
+                # Docker daemon not available; fall back to host execution
+                if _allow_host_fallback():
+                    execution = _run_on_host(host_command, cwd=tmp_dir, timeout_seconds=timeout_seconds)
+                else:
+                    execution["tool_missing"] = True
+                    execution["stderr"] = f"Docker daemon unavailable: {docker_err}"
+                    execution["error"] = {
+                        "type": "DockerUnavailable",
+                        "message": "Docker daemon is not accessible on the server.",
+                        "line": None,
+                        "explanation": "The server cannot run code in a Docker sandbox because the Docker daemon is not running.",
+                        "suggestions": [
+                            "Ensure the Docker daemon is running on the host machine.",
+                            "Check server configuration to enable Docker access.",
+                        ],
+                    }
+                run_in_sandbox.last_result = execution
+                return execution["stderr"]
             container = None
             try:
                 container = client.containers.run(
