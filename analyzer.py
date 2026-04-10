@@ -428,13 +428,11 @@ def _detect_language_mismatch(code: str, selected_language: str) -> Optional[Dic
             rx(r"\bcout\s*<<"),
             rx(r"\bcin\s*>>"),
             rx(r"\bstd::"),
-            rx(r"\bclass\s+\w+"),
-            rx(r"\bnew\b"),
             rx(r"\bnullptr\b"),
             rx(r"\btemplate\b"),
             rx(r"#include\s*<iostream>"),
             rx(r"#include\s*<string>"),
-            rx(r"\b(?:public|private|protected)\s*:"),
+            rx(r"\busing\s+namespace\s+std\s*;"),
         ],
     }
 

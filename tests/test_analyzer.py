@@ -181,6 +181,72 @@ class TestLanguageMismatchDetection:
         assert mismatch is not None
         assert mismatch['detected'] == 'cpp'
 
+    def test_java_code_detected_as_java_not_cpp(self):
+        """Java code should not be mistaken for C++ just because it uses class syntax."""
+        code = (
+            'public class Main {\n'
+            '    public static void main(String[] args) {\n'
+            '        System.out.println("hi");\n'
+            '    }\n'
+            '}'
+        )
+        mismatch = _detect_language_mismatch(code, 'python')
+        assert mismatch is not None
+        assert mismatch['detected'] == 'java'
+
+    def test_java_code_with_new_keyword_detected_as_java(self):
+        """Java object construction should not be treated as a C++ signal."""
+        code = (
+            'public class Main {\n'
+            '    public static void main(String[] args) {\n'
+            '        Main obj = new Main();\n'
+            '        System.out.println(obj);\n'
+            '    }\n'
+            '}'
+        )
+        mismatch = _detect_language_mismatch(code, 'python')
+        assert mismatch is not None
+        assert mismatch['detected'] == 'java'
+
+    def test_java_sample_with_import_and_missing_semicolons_detected_as_java(self):
+        """The sample Java snippet should stay classified as Java even with syntax errors."""
+        code = (
+            'import java.util.Scanner\n'
+            '\n'
+            'class MistakeProgram {\n'
+            '    public static void main(String args[]) {\n'
+            '        int a = 10\n'
+            '        int b = 0;\n'
+            '        System.out.println("A is 10")\n'
+            '        MistakeProgram obj = new MistakeProgram();\n'
+            '    }\n'
+            '}\n'
+        )
+        mismatch = _detect_language_mismatch(code, 'python')
+        assert mismatch is not None
+        assert mismatch['detected'] == 'java'
+
+    def test_javascript_code_detected_as_javascript(self):
+        """JavaScript markers should still be recognized correctly."""
+        code = 'function main() {\n    console.log("hi");\n}'
+        mismatch = _detect_language_mismatch(code, 'python')
+        assert mismatch is not None
+        assert mismatch['detected'] == 'javascript'
+
+    def test_python_code_detected_as_python(self):
+        """Python markers should still be recognized correctly."""
+        code = 'def main():\n    print("hi")'
+        mismatch = _detect_language_mismatch(code, 'javascript')
+        assert mismatch is not None
+        assert mismatch['detected'] == 'python'
+
+    def test_c_code_detected_as_c(self):
+        """C code with stdio/printf markers should detect C."""
+        code = '#include <stdio.h>\nint main(void) {\n    printf("hi\\n");\n    return 0;\n}'
+        mismatch = _detect_language_mismatch(code, 'python')
+        assert mismatch is not None
+        assert mismatch['detected'] == 'c'
+
     @pytest.mark.asyncio
     async def test_c_code_submitted_as_cpp_reports_mismatch(self):
         """C code under cpp selection should mismatch as C."""
