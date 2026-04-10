@@ -106,6 +106,61 @@ def _limit_resources_linux() -> None:
     resource.setrlimit(resource.RLIMIT_CPU, (3, 3))
 
 
+def _allow_host_fallback() -> bool:
+    """Whether direct host execution is allowed when Docker is unavailable."""
+    value = (os.environ.get("ALLOW_HOST_EXECUTION_FALLBACK") or "1").strip().lower()
+    return value in {"1", "true", "yes", "on"}
+
+
+def _run_on_host(command: Any, cwd: str, timeout_seconds: int) -> Dict[str, Any]:
+    """Execute command directly on host as a Docker-unavailable fallback."""
+    execution = _empty_execution()
+    try:
+        run_result = subprocess.run(
+            command,
+            cwd=cwd,
+            capture_output=True,
+            text=True,
+            timeout=timeout_seconds,
+            env=_sandbox_env(),
+            shell=isinstance(command, str),
+            preexec_fn=_limit_resources_linux if sys.platform.startswith("linux") else None,
+        )
+        execution["stdout"] = run_result.stdout or ""
+        execution["stderr"] = run_result.stderr or ""
+        execution["returncode"] = int(run_result.returncode or 0)
+    except subprocess.TimeoutExpired as exc:
+        execution["stdout"] = (exc.stdout or "") if isinstance(exc.stdout, str) else ""
+        execution["stderr"] = (exc.stderr or "") if isinstance(exc.stderr, str) else ""
+        execution["returncode"] = -1
+        execution["timed_out"] = True
+        execution["error"] = {
+            "type": "Timeout",
+            "message": "Program execution took too long and was stopped (possible infinite loop or heavy computation).",
+            "line": None,
+            "explanation": "The program did not finish within the allowed time limit.",
+            "suggestions": [
+                "Check for infinite loops or very slow operations.",
+                "Try running a smaller piece of the program or simplifying the logic.",
+            ],
+        }
+    except FileNotFoundError as exc:
+        execution["tool_missing"] = True
+        execution["returncode"] = -1
+        execution["stderr"] = str(exc)
+        execution["error"] = {
+            "type": "ToolNotFound",
+            "message": str(exc),
+            "line": None,
+            "explanation": "The compiler/runtime executable was not found on the host.",
+            "suggestions": [
+                "Install the required language toolchain and ensure it is in PATH.",
+                "Use the /tools endpoint to verify language availability.",
+            ],
+        }
+    return execution
+
+
 def run_in_sandbox(code: str, language: str, image: str, cmd: Any, timeout: int = 10) -> str:
     execution = _empty_execution()
     execution["returncode"] = -1
@@ -127,12 +182,13 @@ def run_in_sandbox(code: str, language: str, image: str, cmd: Any, timeout: int 
 
     timeout_seconds = max(1, int(timeout))
     command = cmd
+    host_command = cmd
     if isinstance(cmd, (list, tuple)):
         command = [
             part.format(
                 source=f"/workspace/{source_name}",
                 output="/tmp/program",
-                classes="/tmp/classes",
+                classes="/tmp",
                 main_class=main_class,
             )
             for part in cmd
@@ -141,22 +197,39 @@ def run_in_sandbox(code: str, language: str, image: str, cmd: Any, timeout: int 
     try:
         with tempfile.TemporaryDirectory() as tmp_dir:
             source_path = os.path.join(tmp_dir, source_name)
+            output_path = os.path.join(tmp_dir, "program")
+            classes_path = os.path.join(tmp_dir, "classes")
+            os.makedirs(classes_path, exist_ok=True)
             with open(source_path, "w", encoding="utf-8") as f:
                 f.write(code)
 
+            if isinstance(cmd, (list, tuple)):
+                host_command = [
+                    part.format(
+                        source=source_path,
+                        output=output_path,
+                        classes=classes_path,
+                        main_class=main_class,
+                    )
+                    for part in cmd
+                ]
+
             if docker is None:
-                execution["tool_missing"] = True
-                execution["stderr"] = "Docker SDK is not installed on the server."
-                execution["error"] = {
-                    "type": "DockerUnavailable",
-                    "message": "Docker SDK is not installed on the server.",
-                    "line": None,
-                    "explanation": "The server cannot run code in a Docker sandbox until the Docker Python SDK is installed.",
-                    "suggestions": [
-                        "Install the docker Python package and restart the server.",
-                        "Ensure the Docker daemon is available on the host machine.",
-                    ],
-                }
+                if _allow_host_fallback():
+                    execution = _run_on_host(host_command, cwd=tmp_dir, timeout_seconds=timeout_seconds)
+                else:
+                    execution["tool_missing"] = True
+                    execution["stderr"] = "Docker SDK is not installed on the server."
+                    execution["error"] = {
+                        "type": "DockerUnavailable",
+                        "message": "Docker SDK is not installed on the server.",
+                        "line": None,
+                        "explanation": "The server cannot run code in a Docker sandbox until the Docker Python SDK is installed.",
+                        "suggestions": [
+                            "Install the docker Python package and restart the server.",
+                            "Ensure the Docker daemon is available on the host machine.",
+                        ],
+                    }
                 run_in_sandbox.last_result = execution
                 return execution["stderr"]
 
@@ -254,17 +327,20 @@ def run_in_sandbox(code: str, language: str, image: str, cmd: Any, timeout: int 
                 run_in_sandbox.last_result = execution
                 return execution["stderr"]
             except (APIError, DockerException) as exc:
-                execution["stderr"] = str(exc)
-                execution["error"] = {
-                    "type": "DockerAPIError",
-                    "message": str(exc),
-                    "line": None,
-                    "explanation": "The Docker daemon or client returned an API error while starting the sandbox.",
-                    "suggestions": [
-                        "Verify that Docker is running on the host machine.",
-                        "Check whether the requested image can be pulled and started.",
-                    ],
-                }
+                if _allow_host_fallback():
+                    execution = _run_on_host(host_command, cwd=tmp_dir, timeout_seconds=timeout_seconds)
+                else:
+                    execution["stderr"] = str(exc)
+                    execution["error"] = {
+                        "type": "DockerAPIError",
+                        "message": str(exc),
+                        "line": None,
+                        "explanation": "The Docker daemon or client returned an API error while starting the sandbox.",
+                        "suggestions": [
+                            "Verify that Docker is running on the host machine.",
+                            "If deployed on Railway/PAAS without Docker socket, enable ALLOW_HOST_EXECUTION_FALLBACK=1.",
+                        ],
+                    }
                 run_in_sandbox.last_result = execution
                 return execution["stderr"]
     except (APIError, DockerException) as exc:
@@ -985,9 +1061,10 @@ def _analyze_java(code: str, timeout: float = 3.0) -> Tuple[List[Issue], Dict[st
     class_name = match.group(1) if match else "Main"
 
     run_in_sandbox(code, "java", "openjdk:17-slim", [
-        "sh",
-        "-lc",
-        "mkdir -p {classes} && javac -d {classes} {source}",
+        "javac",
+        "-d",
+        "{classes}",
+        "{source}",
     ], timeout=10)
     execution = dict(run_in_sandbox.last_result)
 
@@ -1009,9 +1086,10 @@ def _analyze_java(code: str, timeout: float = 3.0) -> Tuple[List[Issue], Dict[st
         return issues, execution
 
     run_in_sandbox(code, "java", "openjdk:17-slim", [
-        "sh",
-        "-lc",
-        "java -cp {classes} {main_class}",
+        "java",
+        "-cp",
+        "{classes}",
+        "{main_class}",
     ], timeout=10)
     execution = dict(run_in_sandbox.last_result)
 
