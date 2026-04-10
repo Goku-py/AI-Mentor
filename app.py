@@ -243,7 +243,7 @@ def debug_gemini_status():
     # Minimal test request
     endpoint = (
         "https://generativelanguage.googleapis.com/v1beta/"
-        f"models/gemini-2.5-flash:generateContent?key={urllib.parse.quote_plus(api_key)}"
+        f"models/gemini-2.5-flash-preview-04-17:generateContent?key={urllib.parse.quote_plus(api_key)}"
     )
     payload = {
         "contents": [{"parts": [{"text": "Say 'test' only."}]}]
@@ -475,7 +475,7 @@ if __name__ == "__main__":
     print(f"   Available Tools: {AVAILABLE_TOOLS}")
     print(f"   AI Mentor Enabled: {bool(os.environ.get('GEMINI_API_KEY'))}")
     print(f"   CORS Enabled: Yes (Origins: {ALLOWED_ORIGINS})")
-    print(f"   Rate Limiting: /api/v1/analyze → 10/min, 100/day | /api/v1/debug/gemini-status → 3/min, 20/day")
+    print(f"   Rate Limiting: /api/v1/analyze -> 10/min, 100/day | /api/v1/debug/gemini-status -> 3/min, 20/day")
     print(f"   Rate Limit Storage: {RATE_LIMIT_STORAGE}")
     print(f"   Proxy Hops Trusted: {_PROXY_COUNT} (set TRUSTED_PROXY_COUNT for cloud deploys)")
     print(f"\nFlask app running on http://0.0.0.0:{port}")
