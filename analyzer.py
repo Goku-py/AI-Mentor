@@ -1270,7 +1270,7 @@ async def _get_ai_mentorship(code: str, language: str, execution: dict, issues: 
 
             endpoint = (
                 "https://generativelanguage.googleapis.com/v1beta/"
-                f"models/gemini-2.5-flash:generateContent?key={urllib.parse.quote_plus(api_key)}"
+                f"models/gemini-2.5-flash-preview-04-17:generateContent?key={urllib.parse.quote_plus(api_key)}"
             )
             payload = {
                 "contents": [
