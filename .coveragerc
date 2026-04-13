@@ -1,0 +1,17 @@
+[run]
+omit =
+    venv/*
+    tests/*
+    setup.py
+    setup.ps1
+    setup.sh
+    */migrations/*
+
+[report]
+# Show lines that have no test coverage
+show_missing = True
+# Don't include 100%-covered files to keep the report focused
+skip_covered = False
+
+[html]
+directory = htmlcov

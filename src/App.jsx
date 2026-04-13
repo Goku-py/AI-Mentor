@@ -111,6 +111,20 @@ export default function App() {
     const [errorLine, setErrorLine] = useState(null);
     const editorWrapperRef = React.useRef(null);
 
+    // --- Auth state ---
+    // accessToken lives only in React memory (never localStorage) = XSS-safe.
+    // The refresh token is in an httpOnly cookie managed entirely by the browser.
+    const [user, setUser] = useState(null);          // { id, email, role } or null
+    const [accessToken, setAccessToken] = useState(null);
+    const [showAuthModal, setShowAuthModal] = useState(false);
+    const [authTab, setAuthTab] = useState('login'); // 'login' | 'register'
+    const [authForm, setAuthForm] = useState({ email: '', password: '' });
+    const [authError, setAuthError] = useState('');
+    const [authLoading, setAuthLoading] = useState(false);
+
+    // Gap 4: CSRF token — fetched once on mount, sent on every POST
+    const [csrfToken, setCsrfToken] = useState('');
+
     // UI state
     const [fontSize, setFontSize] = useState(() => {
         const saved = parseInt(localStorage.getItem('fontSize') || '15', 10);
@@ -126,6 +140,7 @@ export default function App() {
     const [mentorFeedback, setMentorFeedback] = useState('');
     const [issues, setIssues] = useState([]);
     const [mismatchInfo, setMismatchInfo] = useState(null);
+    const [repoUrl, setRepoUrl] = useState('');
 
     // persist settings
     React.useEffect(() => {
@@ -136,6 +151,117 @@ export default function App() {
         document.documentElement.classList.toggle('light-mode', !darkMode);
         localStorage.setItem('darkMode', darkMode);
     }, [darkMode]);
+
+    // Gap 4: Fetch CSRF token once on mount so all subsequent POSTs are protected
+    useEffect(() => {
+        const API_URL = import.meta.env.VITE_API_URL || '';
+        fetch(`${API_URL}/api/v1/csrf-token`, { credentials: 'include' })
+            .then(r => r.ok ? r.json() : Promise.reject(r))
+            .then(data => setCsrfToken(data.csrf_token || ''))
+            .catch(() => { /* non-fatal */ });
+    }, []);
+
+    // Auth: Try to silently restore session on page load via the httpOnly refresh cookie.
+    // If the cookie is present and valid, we get a new access token without the user
+    // needing to log in again.
+    useEffect(() => {
+        const urlParams = new URLSearchParams(window.location.search);
+        const urlToken = urlParams.get('token');
+        const API_URL = import.meta.env.VITE_API_URL || '';
+
+        if (urlToken) {
+            setAccessToken(urlToken);
+            window.history.replaceState({}, document.title, window.location.pathname);
+            fetch(`${API_URL}/api/v1/auth/me`, {
+                headers: { 'Authorization': `Bearer ${urlToken}` },
+                credentials: 'include',
+            })
+            .then(r => r.ok ? r.json() : null)
+            .then(d => { if(d && d.ok) setUser(d.user); });
+            return;
+        }
+
+        fetch(`${API_URL}/api/v1/auth/refresh`, {
+            method: 'POST',
+            credentials: 'include',
+        })
+            .then(r => r.ok ? r.json() : Promise.reject(r))
+            .then(async data => {
+                setAccessToken(data.access_token);
+                // Load user profile
+                const me = await fetch(`${API_URL}/api/v1/auth/me`, {
+                    headers: { 'Authorization': `Bearer ${data.access_token}` },
+                    credentials: 'include',
+                });
+                if (me.ok) {
+                    const meData = await me.json();
+                    setUser(meData.user);
+                }
+            })
+            .catch(() => { /* No valid session — user must log in */ });
+    }, []);
+
+    // Auth: helper to post to auth endpoints
+    const authFetch = (path, body) => {
+        const API_URL = import.meta.env.VITE_API_URL || '';
+        return fetch(`${API_URL}${path}`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: {
+                'Content-Type': 'application/json',
+                ...(csrfToken ? { 'X-CSRFToken': csrfToken } : {}),
+            },
+            body: JSON.stringify(body),
+        }).then(r => r.json().then(d => ({ ok: r.ok, status: r.status, data: d })));
+    };
+
+    // Auth: silent token refresh (called automatically if access token expires mid-session)
+    const tryRefreshToken = async () => {
+        const API_URL = import.meta.env.VITE_API_URL || '';
+        try {
+            const r = await fetch(`${API_URL}/api/v1/auth/refresh`, {
+                method: 'POST', credentials: 'include',
+            });
+            if (!r.ok) return null;
+            const d = await r.json();
+            setAccessToken(d.access_token);
+            return d.access_token;
+        } catch { return null; }
+    };
+
+    // Auth: handle login or register form submission
+    const handleAuthSubmit = async (e) => {
+        e.preventDefault();
+        setAuthError('');
+        if (!authForm.email || !authForm.password) {
+            setAuthError('Please fill in all fields.');
+            return;
+        }
+        setAuthLoading(true);
+        const path = authTab === 'login' ? '/api/v1/auth/login' : '/api/v1/auth/register';
+        const result = await authFetch(path, authForm);
+        setAuthLoading(false);
+        if (!result.ok) {
+            setAuthError(result.data?.error || 'Something went wrong. Please try again.');
+            return;
+        }
+        setUser(result.data.user);
+        setAccessToken(result.data.access_token);
+        setShowAuthModal(false);
+        setAuthForm({ email: '', password: '' });
+    };
+
+    // Auth: logout
+    const handleLogout = async () => {
+        const API_URL = import.meta.env.VITE_API_URL || '';
+        await fetch(`${API_URL}/api/v1/auth/logout`, {
+            method: 'POST',
+            credentials: 'include',
+            headers: { ...(accessToken ? { 'Authorization': `Bearer ${accessToken}` } : {}) },
+        }).catch(() => {});
+        setUser(null);
+        setAccessToken(null);
+    };
 
     useEffect(() => {
         const handler = () => setIsFullscreen(!!document.fullscreenElement);
@@ -180,6 +306,42 @@ export default function App() {
         textarea.scrollTop = targetScrollTop;
     }, [errorLine, fontSize]);
 
+    const handleAnalyzeRepo = async () => {
+        setIsAnalyzing(true);
+        setOutput('');
+        setErrorMsg('');
+        setMentorFeedback('Analyzing GitHub Repository... This takes up to 45 seconds.');
+        setIssues([]);
+        setErrorLine(null);
+        setMismatchInfo(null);
+
+        const API_URL = import.meta.env.VITE_API_URL || '';
+        try {
+            const response = await fetch(`${API_URL}/api/v1/analyze/github`, {
+                method: "POST",
+                credentials: 'include',
+                headers: {
+                    "Content-Type": "application/json",
+                    ...(accessToken ? { "Authorization": `Bearer ${accessToken}` } : {}),
+                    ...(csrfToken ? { "X-CSRFToken": csrfToken } : {}),
+                },
+                body: JSON.stringify({ repo_url: repoUrl }),
+            });
+            const data = await response.json();
+            if (data.ok) {
+                setMentorFeedback(data.ai_mentor_feedback || "Done.");
+            } else {
+                setErrorMsg(data.error || "Analysis failed.");
+                setMentorFeedback('');
+            }
+        } catch (err) {
+            setErrorMsg("Network error: Make sure the Python backend (app.py) is running on port 5000.");
+            setMentorFeedback('');
+        } finally {
+            setIsAnalyzing(false);
+        }
+    };
+
     const handleRun = async () => {
         setIsAnalyzing(true);
         setOutput('');
@@ -191,12 +353,32 @@ export default function App() {
 
         const API_URL = import.meta.env.VITE_API_URL || '';
 
+        // Helper: run the actual fetch (token is optional — guests have no token)
+        const doFetch = (token) => fetch(`${API_URL}/api/v1/analyze`, {
+            method: "POST",
+            credentials: 'include',
+            headers: {
+                "Content-Type": "application/json",
+                // Only send Authorization when user is logged in
+                ...(token ? { "Authorization": `Bearer ${token}` } : {}),
+                ...(csrfToken ? { "X-CSRFToken": csrfToken } : {}),
+            },
+            body: JSON.stringify({ code, language }),
+        });
+
         try {
-            const response = await fetch(`${API_URL}/api/v1/analyze`, {
-                method: "POST",
-                headers: { "Content-Type": "application/json" },
-                body: JSON.stringify({ code, language }),
-            });
+            let response = await doFetch(accessToken);
+
+            // If 401 and we had a token, try a silent refresh then retry once
+            if (response.status === 401 && accessToken) {
+                const newToken = await tryRefreshToken();
+                if (!newToken) {
+                    setUser(null);
+                    setAccessToken(null);
+                }
+                // Retry without token (guest fallback) if refresh fails
+                response = await doFetch(newToken || null);
+            }
 
             let data;
             try {
@@ -330,6 +512,80 @@ export default function App() {
 
     return (
         <div className="app-container">
+            {/* Auth Modal */}
+            {showAuthModal && (
+                <div className="auth-overlay" onClick={(e) => { if (e.target === e.currentTarget) setShowAuthModal(false); }}>
+                    <div className="auth-modal" role="dialog" aria-modal="true" aria-label="Sign in">
+                        <button className="auth-modal-close" onClick={() => setShowAuthModal(false)} aria-label="Close">✕</button>
+                        <div className="auth-modal-logo">
+                            <CodeIcon />
+                            <span>AI Code Mentor</span>
+                        </div>
+                        <div className="auth-tabs">
+                            <button
+                                className={`auth-tab ${authTab === 'login' ? 'active' : ''}`}
+                                onClick={() => { setAuthTab('login'); setAuthError(''); }}
+                            >Sign In</button>
+                            <button
+                                className={`auth-tab ${authTab === 'register' ? 'active' : ''}`}
+                                onClick={() => { setAuthTab('register'); setAuthError(''); }}
+                            >Create Account</button>
+                        </div>
+                        <form className="auth-form" onSubmit={handleAuthSubmit} noValidate>
+                            <div className="auth-field">
+                                <label htmlFor="auth-email">Email address</label>
+                                <input
+                                    id="auth-email"
+                                    type="email"
+                                    autoComplete="email"
+                                    placeholder="you@example.com"
+                                    value={authForm.email}
+                                    onChange={e => setAuthForm(f => ({ ...f, email: e.target.value }))}
+                                    disabled={authLoading}
+                                    required
+                                />
+                            </div>
+                            <div className="auth-field">
+                                <label htmlFor="auth-password">Password</label>
+                                <input
+                                    id="auth-password"
+                                    type="password"
+                                    autoComplete={authTab === 'login' ? 'current-password' : 'new-password'}
+                                    placeholder={authTab === 'register' ? 'Min 8 chars, 1 digit or symbol' : '••••••••'}
+                                    value={authForm.password}
+                                    onChange={e => setAuthForm(f => ({ ...f, password: e.target.value }))}
+                                    disabled={authLoading}
+                                    required
+                                />
+                            </div>
+                            {authError && (
+                                <div className="auth-error" role="alert">{authError}</div>
+                            )}
+                            <button type="submit" className="auth-submit" disabled={authLoading}>
+                                {authLoading ? 'Please wait…' : (authTab === 'login' ? 'Sign In' : 'Create Account')}
+                            </button>
+                        </form>
+                        
+                        <div className="auth-divider">
+                            <span>OR</span>
+                        </div>
+                        <button type="button" className="auth-github-btn" onClick={() => {
+                            window.location.href = `${import.meta.env.VITE_API_URL || ''}/api/v1/auth/github/login`;
+                        }}>
+                            Login with GitHub
+                        </button>
+
+                        <p className="auth-switch">
+                            {authTab === 'login' ? (
+                                <>No account? <button onClick={() => { setAuthTab('register'); setAuthError(''); }}>Create one free</button></>
+                            ) : (
+                                <>Already have one? <button onClick={() => { setAuthTab('login'); setAuthError(''); }}>Sign in</button></>
+                            )}
+                        </p>
+                    </div>
+                </div>
+            )}
+
             {/* hidden file input for uploads */}
             <input
                 type="file"
@@ -359,15 +615,49 @@ export default function App() {
                     <button
                         className="run-btn"
                         onClick={handleRun}
-                        disabled={isAnalyzing || !code.trim()}
+                        disabled={isAnalyzing || !code.trim() || !!repoUrl.trim()}
                     >
                         <PlayIcon />
-                        {isAnalyzing ? "Running..." : "Run Code"}
+                        {isAnalyzing && !repoUrl.trim() ? "Running..." : "Run"}
+                    </button>
+                    <input 
+                        type="url" 
+                        placeholder="https://github.com/..." 
+                        value={repoUrl} 
+                        onChange={e => setRepoUrl(e.target.value)} 
+                        className="repo-input"
+                        title="Enter GitHub Repository URL to statically analyze its architecture"
+                    />
+                    <button
+                        className="run-btn"
+                        onClick={handleAnalyzeRepo}
+                        disabled={isAnalyzing || !repoUrl.trim()}
+                        title="Analyze Repository Architecture"
+                    >
+                         <SparklesIcon />
+                         {isAnalyzing && !!repoUrl.trim() ? "..." : "Repo"}
                     </button>
                     {/* additional controls */}
                     <button title="Clear output" onClick={clearOutput}><TrashIcon /></button>
                     <button title={isFullscreen ? 'Exit fullscreen' : 'Enter fullscreen'} onClick={toggleFullscreen}><FullscreenIcon exit={isFullscreen} /></button>
                     <button title="Share" onClick={handleShare}><ShareIcon /></button>
+
+                    {/* Auth: user badge or login button */}
+                    {user ? (
+                        <div className="auth-user-badge">
+                            <span className="auth-avatar">{user.email[0].toUpperCase()}</span>
+                            <span className="auth-email" title={user.email}>{user.email.split('@')[0]}</span>
+                            <span className={`auth-role-pill auth-role-${user.role}`}>{user.role}</span>
+                            <button className="auth-logout-btn" onClick={handleLogout} title="Sign out">Sign out</button>
+                        </div>
+                    ) : (
+                        <button
+                            className="auth-login-btn"
+                            onClick={() => { setShowAuthModal(true); setAuthTab('login'); }}
+                        >
+                            Sign in
+                        </button>
+                    )}
                 </div>
             </header>
 

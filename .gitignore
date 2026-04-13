@@ -55,3 +55,12 @@ Thumbs.db
 # Logs
 logs/
 *.log
+
+# Large debug / security scan output files (never commit these)
+bandit_output.json
+bandit_verification.json
+flake8_output.txt
+flake8_verification.txt
+js_out.txt
+ts_output.txt
+out.txt

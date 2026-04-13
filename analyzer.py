@@ -4,17 +4,22 @@ import ast
 import json
 import os
 import re
-import subprocess
+import subprocess  # nosec B404
 import sys
 import tempfile
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
-from dataclasses import dataclass, asdict
+import hashlib
+import logging
+from collections import OrderedDict
+from dataclasses import dataclass
 from typing import Any, Dict, List, Optional, Tuple
 import httpx
 import asyncio
+
+from app_pkg.security.middleware import SECURITY_METRICS
 
 try:
     import docker
@@ -41,7 +46,7 @@ def verify_tools() -> Dict[str, bool]:
         "c": False,
         "cpp": False,
     }
-    
+
     tool_commands = {
         "python": [sys.executable, "--version"],
         "javascript": ["node", "--version"],
@@ -49,10 +54,10 @@ def verify_tools() -> Dict[str, bool]:
         "c": ["gcc", "--version"],
         "cpp": ["g++", "--version"],
     }
-    
+
     for lang, cmd in tool_commands.items():
         try:
-            subprocess.run(
+            subprocess.run(  # nosec B603
                 cmd,
                 capture_output=True,
                 text=True,
@@ -61,9 +66,8 @@ def verify_tools() -> Dict[str, bool]:
             tools[lang] = True
         except (FileNotFoundError, subprocess.TimeoutExpired):
             tools[lang] = False
-    
-    return tools
 
+    return tools
 
 
 def _empty_execution() -> Dict[str, Any]:
@@ -108,23 +112,82 @@ def _limit_resources_linux() -> None:
 
 def _allow_host_fallback() -> bool:
     """Whether direct host execution is allowed when Docker is unavailable."""
-    value = (os.environ.get("ALLOW_HOST_EXECUTION_FALLBACK") or "1").strip().lower()
-    return value in {"1", "true", "yes", "on"}
+    value = (os.environ.get("ALLOW_HOST_EXECUTION_FALLBACK") or "0").strip().lower()
+    if value not in {"1", "true", "yes", "on"}:
+        return False
+    env_mode = (
+        (os.environ.get("FLASK_ENV") or os.environ.get("APP_ENV") or "development")
+        .strip()
+        .lower()
+    )
+    # Never allow host fallback in production-like environments.
+    return env_mode not in {"prod", "production"}
+
+
+def sandbox_runtime_status() -> Dict[str, Any]:
+    """Return runtime sandbox readiness for startup checks."""
+    status = {
+        "ok": False,
+        "docker_sdk_installed": docker is not None,
+        "docker_daemon_available": False,
+        "host_fallback_allowed": _allow_host_fallback(),
+        "mode": "unavailable",
+        "reason": "",
+    }
+    if docker is None:
+        status["reason"] = "Docker SDK not installed."
+        if status["host_fallback_allowed"]:
+            status["ok"] = True
+            status["mode"] = "host-fallback"
+        return status
+    try:
+        client = docker.from_env()
+        client.ping()
+        status["ok"] = True
+        status["docker_daemon_available"] = True
+        status["mode"] = "docker"
+        return status
+    except Exception as exc:  # pragma: no cover - environment specific
+        status["reason"] = f"Docker daemon unavailable: {exc}"
+        if status["host_fallback_allowed"]:
+            status["ok"] = True
+            status["mode"] = "host-fallback"
+        return status
+
+
+def _sandbox_unavailable_execution(message: str, explanation: str) -> Dict[str, Any]:
+    execution = _empty_execution()
+    execution["tool_missing"] = True
+    execution["returncode"] = -1
+    execution["stderr"] = message
+    execution["error"] = {
+        "type": "SandboxUnavailable",
+        "message": message,
+        "line": None,
+        "explanation": explanation,
+        "suggestions": [
+            "Enable Docker daemon access on this server.",
+            "For local development only, set ALLOW_HOST_EXECUTION_FALLBACK=1.",
+        ],
+    }
+    return execution
 
 
 def _run_on_host(command: Any, cwd: str, timeout_seconds: int) -> Dict[str, Any]:
     """Execute command directly on host as a Docker-unavailable fallback."""
     execution = _empty_execution()
     try:
-        run_result = subprocess.run(
+        run_result = subprocess.run(  # nosec B603
             command,
             cwd=cwd,
             capture_output=True,
             text=True,
             timeout=timeout_seconds,
             env=_sandbox_env(),
-            shell=isinstance(command, str),
-            preexec_fn=_limit_resources_linux if sys.platform.startswith("linux") else None,
+            shell=False,
+            preexec_fn=_limit_resources_linux
+            if sys.platform.startswith("linux")
+            else None,
         )
         execution["stdout"] = run_result.stdout or ""
         execution["stderr"] = run_result.stderr or ""
@@ -161,7 +224,9 @@ def _run_on_host(command: Any, cwd: str, timeout_seconds: int) -> Dict[str, Any]
     return execution
 
 
-def run_in_sandbox(code: str, language: str, image: str, cmd: Any, timeout: int = 10) -> str:
+def run_in_sandbox(
+    code: str, language: str, image: str, cmd: Any, timeout: int = 10
+) -> str:
     execution = _empty_execution()
     execution["returncode"] = -1
 
@@ -178,7 +243,9 @@ def run_in_sandbox(code: str, language: str, image: str, cmd: Any, timeout: int 
         match = re.search(r"public\s+(?:final\s+)?class\s+(\w+)", code)
         if match:
             main_class = match.group(1)
-    source_name = source_names.get(language_key, f"{main_class}.java" if language_key == "java" else "main.txt")
+    source_name = source_names.get(
+        language_key, f"{main_class}.java" if language_key == "java" else "main.txt"
+    )
 
     timeout_seconds = max(1, int(timeout))
     command = cmd
@@ -187,8 +254,8 @@ def run_in_sandbox(code: str, language: str, image: str, cmd: Any, timeout: int 
         command = [
             part.format(
                 source=f"/workspace/{source_name}",
-                output="/tmp/program",
-                classes="/tmp",
+                output="/tmp/program",  # nosec B108
+                classes="/tmp",  # nosec B108
                 main_class=main_class,
             )
             for part in cmd
@@ -216,20 +283,14 @@ def run_in_sandbox(code: str, language: str, image: str, cmd: Any, timeout: int 
 
             if docker is None:
                 if _allow_host_fallback():
-                    execution = _run_on_host(host_command, cwd=tmp_dir, timeout_seconds=timeout_seconds)
+                    execution = _run_on_host(
+                        host_command, cwd=tmp_dir, timeout_seconds=timeout_seconds
+                    )
                 else:
-                    execution["tool_missing"] = True
-                    execution["stderr"] = "Docker SDK is not installed on the server."
-                    execution["error"] = {
-                        "type": "DockerUnavailable",
-                        "message": "Docker SDK is not installed on the server.",
-                        "line": None,
-                        "explanation": "The server cannot run code in a Docker sandbox until the Docker Python SDK is installed.",
-                        "suggestions": [
-                            "Install the docker Python package and restart the server.",
-                            "Ensure the Docker daemon is available on the host machine.",
-                        ],
-                    }
+                    execution = _sandbox_unavailable_execution(
+                        "Docker SDK is not installed on this server.",
+                        "Untrusted code execution requires a sandbox. Host fallback is disabled.",
+                    )
                 run_in_sandbox.last_result = execution
                 return execution["stderr"]
 
@@ -238,20 +299,14 @@ def run_in_sandbox(code: str, language: str, image: str, cmd: Any, timeout: int 
             except Exception as docker_err:
                 # Docker daemon not available; fall back to host execution
                 if _allow_host_fallback():
-                    execution = _run_on_host(host_command, cwd=tmp_dir, timeout_seconds=timeout_seconds)
+                    execution = _run_on_host(
+                        host_command, cwd=tmp_dir, timeout_seconds=timeout_seconds
+                    )
                 else:
-                    execution["tool_missing"] = True
-                    execution["stderr"] = f"Docker daemon unavailable: {docker_err}"
-                    execution["error"] = {
-                        "type": "DockerUnavailable",
-                        "message": "Docker daemon is not accessible on the server.",
-                        "line": None,
-                        "explanation": "The server cannot run code in a Docker sandbox because the Docker daemon is not running.",
-                        "suggestions": [
-                            "Ensure the Docker daemon is running on the host machine.",
-                            "Check server configuration to enable Docker access.",
-                        ],
-                    }
+                    execution = _sandbox_unavailable_execution(
+                        f"Docker daemon unavailable: {docker_err}",
+                        "Sandbox runtime is required for untrusted code execution.",
+                    )
                 run_in_sandbox.last_result = execution
                 return execution["stderr"]
             container = None
@@ -265,18 +320,26 @@ def run_in_sandbox(code: str, language: str, image: str, cmd: Any, timeout: int 
                     mem_limit="64m",
                     cpu_quota=50000,
                     read_only=True,
+                    user="65534:65534",
+                    cap_drop=["ALL"],
+                    security_opt=["no-new-privileges:true"],
+                    pids_limit=128,
                     remove=True,
                     stdout=True,
                     stderr=True,
                     detach=True,
-                    tmpfs={"/tmp": "rw,nosuid,size=64m"},
+                    tmpfs={"/tmp": "rw,nosuid,size=64m"},  # nosec B108
                 )
 
                 deadline = time.monotonic() + timeout_seconds
                 timed_out = False
                 while True:
                     container.reload()
-                    state = container.attrs.get("State", {}) if isinstance(container.attrs, dict) else {}
+                    state = (
+                        container.attrs.get("State", {})
+                        if isinstance(container.attrs, dict)
+                        else {}
+                    )
                     if not state.get("Running", False):
                         execution["returncode"] = int(state.get("ExitCode", 0) or 0)
                         break
@@ -287,7 +350,11 @@ def run_in_sandbox(code: str, language: str, image: str, cmd: Any, timeout: int 
                         except APIError:
                             pass
                         container.reload()
-                        state = container.attrs.get("State", {}) if isinstance(container.attrs, dict) else {}
+                        state = (
+                            container.attrs.get("State", {})
+                            if isinstance(container.attrs, dict)
+                            else {}
+                        )
                         execution["returncode"] = int(state.get("ExitCode", -1) or -1)
                         execution["timed_out"] = True
                         execution["error"] = {
@@ -312,8 +379,16 @@ def run_in_sandbox(code: str, language: str, image: str, cmd: Any, timeout: int 
                 except APIError:
                     stderr_bytes = b""
 
-                stdout_text = stdout_bytes.decode("utf-8", errors="replace") if isinstance(stdout_bytes, bytes) else str(stdout_bytes or "")
-                stderr_text = stderr_bytes.decode("utf-8", errors="replace") if isinstance(stderr_bytes, bytes) else str(stderr_bytes or "")
+                stdout_text = (
+                    stdout_bytes.decode("utf-8", errors="replace")
+                    if isinstance(stdout_bytes, bytes)
+                    else str(stdout_bytes or "")
+                )
+                stderr_text = (
+                    stderr_bytes.decode("utf-8", errors="replace")
+                    if isinstance(stderr_bytes, bytes)
+                    else str(stderr_bytes or "")
+                )
 
                 execution["stdout"] = stdout_text
                 execution["stderr"] = stderr_text
@@ -321,22 +396,35 @@ def run_in_sandbox(code: str, language: str, image: str, cmd: Any, timeout: int 
                     execution["returncode"] = 0
 
                 run_in_sandbox.last_result = execution
-                return execution["stderr"] if execution["returncode"] != 0 else execution["stdout"]
+                return (
+                    execution["stderr"]
+                    if execution["returncode"] != 0
+                    else execution["stdout"]
+                )
             except ContainerError as exc:
                 stdout_text = ""
                 stderr_text = ""
                 if getattr(exc, "stdout", None) is not None:
                     stdout_value = exc.stdout
-                    stdout_text = stdout_value.decode("utf-8", errors="replace") if isinstance(stdout_value, bytes) else str(stdout_value)
+                    stdout_text = (
+                        stdout_value.decode("utf-8", errors="replace")
+                        if isinstance(stdout_value, bytes)
+                        else str(stdout_value)
+                    )
                 if getattr(exc, "stderr", None) is not None:
                     stderr_value = exc.stderr
-                    stderr_text = stderr_value.decode("utf-8", errors="replace") if isinstance(stderr_value, bytes) else str(stderr_value)
+                    stderr_text = (
+                        stderr_value.decode("utf-8", errors="replace")
+                        if isinstance(stderr_value, bytes)
+                        else str(stderr_value)
+                    )
                 execution["stdout"] = stdout_text
                 execution["stderr"] = stderr_text or stdout_text or str(exc)
                 execution["returncode"] = int(getattr(exc, "exit_status", -1) or -1)
                 execution["error"] = {
                     "type": "DockerContainerError",
-                    "message": execution["stderr"] or "Docker container execution failed.",
+                    "message": execution["stderr"]
+                    or "Docker container execution failed.",
                     "line": None,
                     "explanation": "The Docker container returned an execution error.",
                     "suggestions": [
@@ -348,19 +436,14 @@ def run_in_sandbox(code: str, language: str, image: str, cmd: Any, timeout: int 
                 return execution["stderr"]
             except (APIError, DockerException) as exc:
                 if _allow_host_fallback():
-                    execution = _run_on_host(host_command, cwd=tmp_dir, timeout_seconds=timeout_seconds)
+                    execution = _run_on_host(
+                        host_command, cwd=tmp_dir, timeout_seconds=timeout_seconds
+                    )
                 else:
-                    execution["stderr"] = str(exc)
-                    execution["error"] = {
-                        "type": "DockerAPIError",
-                        "message": str(exc),
-                        "line": None,
-                        "explanation": "The Docker daemon or client returned an API error while starting the sandbox.",
-                        "suggestions": [
-                            "Verify that Docker is running on the host machine.",
-                            "If deployed on Railway/PAAS without Docker socket, enable ALLOW_HOST_EXECUTION_FALLBACK=1.",
-                        ],
-                    }
+                    execution = _sandbox_unavailable_execution(
+                        str(exc),
+                        "Sandbox startup failed and host fallback is disabled.",
+                    )
                 run_in_sandbox.last_result = execution
                 return execution["stderr"]
     except (APIError, DockerException) as exc:
@@ -382,23 +465,81 @@ def run_in_sandbox(code: str, language: str, image: str, cmd: Any, timeout: int 
 run_in_sandbox.last_result = _empty_execution()
 
 
+# Comprehensive list of modules that allow sandbox escape:
+#   - os, sys, subprocess: process/system access
+#   - socket, ssl, http, urllib3, ftplib, smtplib, telnetlib: network access
+#   - shutil, pathlib, glob, fnmatch, tempfile: broad filesystem access
+#   - ctypes, cffi, mmap, resource: native/memory access
+#   - importlib, pkgutil, zipimport: dynamic import escape
+#   - pty, signal, fcntl, termios: terminal/process control
+#   - pickle, shelve, marshal: arbitrary code deserialisation
+_BLOCKED_MODULES: frozenset = frozenset(
+    {
+        "os",
+        "sys",
+        "subprocess",
+        "socket",
+        "ssl",
+        "http",
+        "urllib3",
+        "ftplib",
+        "smtplib",
+        "telnetlib",
+        "shutil",
+        "pathlib",
+        "glob",
+        "fnmatch",
+        "tempfile",
+        "ctypes",
+        "cffi",
+        "mmap",
+        "resource",
+        "importlib",
+        "pkgutil",
+        "zipimport",
+        "pty",
+        "signal",
+        "fcntl",
+        "termios",
+        "pickle",
+        "shelve",
+        "marshal",
+    }
+)
+
+# Built-in function names that allow arbitrary code execution
+_BLOCKED_BUILTINS: frozenset = frozenset({"eval", "exec", "compile", "__import__"})
+
+
 def _blocked_python_import(code: str) -> Optional[str]:
-    blocked_modules = {"os", "sys", "subprocess"}
+    """Return the name of the first blocked import or dangerous built-in call found, or None."""
     try:
         tree = ast.parse(code)
     except SyntaxError:
         return None
 
     for node in ast.walk(tree):
+        # Block dangerous imports
         if isinstance(node, ast.Import):
             for alias in node.names:
                 root_module = alias.name.split(".", 1)[0]
-                if root_module in blocked_modules:
+                if root_module in _BLOCKED_MODULES:
                     return root_module
         elif isinstance(node, ast.ImportFrom) and node.module:
             root_module = node.module.split(".", 1)[0]
-            if root_module in blocked_modules:
+            if root_module in _BLOCKED_MODULES:
                 return root_module
+
+        # Block eval() / exec() / compile() / __import__() calls
+        elif isinstance(node, ast.Call):
+            func = node.func
+            # Direct call: eval(...)
+            if isinstance(func, ast.Name) and func.id in _BLOCKED_BUILTINS:
+                return func.id
+            # Attribute call: builtins.eval(...)
+            if isinstance(func, ast.Attribute) and func.attr in _BLOCKED_BUILTINS:
+                return func.attr
+
     return None
 
 
@@ -469,7 +610,9 @@ def _line_based_checks(code: str) -> List[Issue]:
     return issues
 
 
-def _detect_language_mismatch(code: str, selected_language: str) -> Optional[Dict[str, str]]:
+def _detect_language_mismatch(
+    code: str, selected_language: str
+) -> Optional[Dict[str, str]]:
     """Detect likely language mismatch using marker-score heuristics."""
     selected = (selected_language or "python").strip().lower()
     if selected == "js":
@@ -571,9 +714,14 @@ def _detect_language_mismatch(code: str, selected_language: str) -> Optional[Dic
     return mismatch(detected)
 
 
-def _python_error_help(exc_type: str, message: str, difficulty: str = "beginner", line: Optional[int] = None) -> Dict[str, Any]:
+def _python_error_help(
+    exc_type: str,
+    message: str,
+    difficulty: str = "beginner",
+    line: Optional[int] = None,
+) -> Dict[str, Any]:
     """Return explanation and suggestions for common Python runtime errors.
-    
+
     Args:
         exc_type: The exception type name
         message: The error message
@@ -581,7 +729,7 @@ def _python_error_help(exc_type: str, message: str, difficulty: str = "beginner"
         line: The line number where error occurred (for beginner difficulty)
     """
     exc_type = exc_type or ""
-    
+
     # Default beginner explanations
     explanation = "Your program raised a runtime error."
     suggestions: List[str] = [
@@ -609,7 +757,9 @@ def _python_error_help(exc_type: str, message: str, difficulty: str = "beginner"
             suggestions = []
     elif exc_type == "NameError":
         if difficulty == "beginner":
-            explanation = "Python tried to use a variable or name that has not been defined yet."
+            explanation = (
+                "Python tried to use a variable or name that has not been defined yet."
+            )
             if line:
                 explanation += f" Look at line {line}."
             suggestions = [
@@ -688,12 +838,20 @@ def _python_error_help(exc_type: str, message: str, difficulty: str = "beginner"
     }
 
 
-def _parse_python_traceback(stderr: str, difficulty: str = "beginner") -> Dict[str, Any]:
+def _parse_python_traceback(
+    stderr: str, difficulty: str = "beginner"
+) -> Dict[str, Any]:
     """
     Extract error type, message and line number from a Python traceback.
     """
     if not stderr:
-        return {"type": None, "message": "", "line": None, "explanation": "", "suggestions": []}
+        return {
+            "type": None,
+            "message": "",
+            "line": None,
+            "explanation": "",
+            "suggestions": [],
+        }
 
     lines = stderr.strip().splitlines()
     exc_type = None
@@ -718,12 +876,19 @@ def _parse_python_traceback(stderr: str, difficulty: str = "beginner") -> Dict[s
             exc_message = parts[1].strip()
             break
 
-    help_data = _python_error_help(str(exc_type) if exc_type else "", exc_message, difficulty=difficulty, line=line_number)
+    help_data = _python_error_help(
+        str(exc_type) if exc_type else "",
+        exc_message,
+        difficulty=difficulty,
+        line=line_number,
+    )
     help_data["line"] = line_number
     return help_data
 
 
-def _run_python(code: str, timeout: float = 3.0, difficulty: str = "beginner") -> Dict[str, Any]:
+def _run_python(
+    code: str, timeout: float = 3.0, difficulty: str = "beginner"
+) -> Dict[str, Any]:
     execution = _empty_execution()
 
     blocked_module = _blocked_python_import(code)
@@ -742,18 +907,27 @@ def _run_python(code: str, timeout: float = 3.0, difficulty: str = "beginner") -
         }
         return execution
 
-    run_in_sandbox(code, "python", "python:3.11-slim", ["python", "{source}"], timeout=10)
+    run_in_sandbox(
+        code, "python", "python:3.11-slim", ["python", "{source}"], timeout=10
+    )
     execution = dict(run_in_sandbox.last_result)
 
     if execution["returncode"] != 0 and not execution["error"] and execution["stderr"]:
-        execution["error"] = _parse_python_traceback(execution["stderr"], difficulty=difficulty)
+        execution["error"] = _parse_python_traceback(
+            execution["stderr"], difficulty=difficulty
+        )
 
     return execution
 
 
-def _javascript_error_help(error_name: str, message: str, difficulty: str = "beginner", line: Optional[int] = None) -> Dict[str, Any]:
+def _javascript_error_help(
+    error_name: str,
+    message: str,
+    difficulty: str = "beginner",
+    line: Optional[int] = None,
+) -> Dict[str, Any]:
     """Return explanation and suggestions for common JavaScript runtime errors.
-    
+
     Args:
         error_name: The error type name
         message: The error message
@@ -761,7 +935,7 @@ def _javascript_error_help(error_name: str, message: str, difficulty: str = "beg
         line: The line number where error occurred (for beginner difficulty)
     """
     error_name = error_name or ""
-    
+
     # Default beginner explanations
     explanation = "Your JavaScript program raised a runtime error."
     suggestions: List[str] = [
@@ -837,7 +1011,13 @@ def _parse_node_error(stderr: str, difficulty: str = "beginner") -> Dict[str, An
     Extract error type, message and (best-effort) line number from a Node.js error.
     """
     if not stderr:
-        return {"type": None, "message": "", "line": None, "explanation": "", "suggestions": []}
+        return {
+            "type": None,
+            "message": "",
+            "line": None,
+            "explanation": "",
+            "suggestions": [],
+        }
 
     lines = stderr.strip().splitlines()
 
@@ -862,24 +1042,35 @@ def _parse_node_error(stderr: str, difficulty: str = "beginner") -> Dict[str, An
             except ValueError:
                 pass
 
-    help_data = _javascript_error_help(str(error_name) if error_name else "", message, difficulty=difficulty, line=line_number)
+    help_data = _javascript_error_help(
+        str(error_name) if error_name else "",
+        message,
+        difficulty=difficulty,
+        line=line_number,
+    )
     help_data["line"] = line_number
     return help_data
 
 
-def _run_node(code: str, timeout: float = 3.0, difficulty: str = "beginner") -> Dict[str, Any]:
+def _run_node(
+    code: str, timeout: float = 3.0, difficulty: str = "beginner"
+) -> Dict[str, Any]:
     execution = _empty_execution()
 
     run_in_sandbox(code, "javascript", "node:18-slim", ["node", "{source}"], timeout=10)
     execution = dict(run_in_sandbox.last_result)
 
     if execution["returncode"] != 0 and not execution["error"] and execution["stderr"]:
-        execution["error"] = _parse_node_error(execution["stderr"], difficulty=difficulty)
+        execution["error"] = _parse_node_error(
+            execution["stderr"], difficulty=difficulty
+        )
 
     return execution
 
 
-def _analyze_python(code: str, difficulty: str = "beginner") -> Tuple[List[Issue], Dict[str, Any]]:
+def _analyze_python(
+    code: str, difficulty: str = "beginner"
+) -> Tuple[List[Issue], Dict[str, Any]]:
     issues: List[Issue] = []
     syntax_issues, syntax_exc = _check_syntax(code)
     issues.extend(syntax_issues)
@@ -890,7 +1081,12 @@ def _analyze_python(code: str, difficulty: str = "beginner") -> Tuple[List[Issue
         execution = _run_python(code, difficulty=difficulty)
     else:
         # Mirror the syntax error into the execution block so the UI can show it
-        execution["error"] = _python_error_help("SyntaxError", str(syntax_exc), difficulty=difficulty, line=syntax_exc.lineno or 1)
+        execution["error"] = _python_error_help(
+            "SyntaxError",
+            str(syntax_exc),
+            difficulty=difficulty,
+            line=syntax_exc.lineno or 1,
+        )
         execution["error"]["line"] = syntax_exc.lineno or 1
         execution["stderr"] = str(syntax_exc)
         execution["returncode"] = 1
@@ -898,7 +1094,9 @@ def _analyze_python(code: str, difficulty: str = "beginner") -> Tuple[List[Issue
     return issues, execution
 
 
-def _analyze_javascript(code: str, difficulty: str = "beginner") -> Tuple[List[Issue], Dict[str, Any]]:
+def _analyze_javascript(
+    code: str, difficulty: str = "beginner"
+) -> Tuple[List[Issue], Dict[str, Any]]:
     # Reuse generic line-based checks for JavaScript as well
     issues = _line_based_checks(code)
     execution = _run_node(code, difficulty=difficulty)
@@ -926,7 +1124,9 @@ def _parse_gcc_output(output: str, language_label: str) -> List[Issue]:
             line_no = 1
         severity = "warning" if level == "warning" else "error"
         code = f"{language_label.upper()}_{level.upper()}"
-        issues.append(Issue(line=line_no, severity=severity, code=code, message=msg.strip()))
+        issues.append(
+            Issue(line=line_no, severity=severity, code=code, message=msg.strip())
+        )
     return issues
 
 
@@ -951,7 +1151,9 @@ def _parse_java_compile_output(output: str) -> List[Issue]:
             line_no = 1
         severity = "warning" if level == "warning" else "error"
         code = f"JAVA_{level.upper()}"
-        issues.append(Issue(line=line_no, severity=severity, code=code, message=msg.strip()))
+        issues.append(
+            Issue(line=line_no, severity=severity, code=code, message=msg.strip())
+        )
     return issues
 
 
@@ -960,7 +1162,13 @@ def _parse_java_runtime_error(stderr: str) -> Dict[str, Any]:
     Best-effort extraction of Java runtime exception information.
     """
     if not stderr:
-        return {"type": None, "message": "", "line": None, "explanation": "", "suggestions": []}
+        return {
+            "type": None,
+            "message": "",
+            "line": None,
+            "explanation": "",
+            "suggestions": [],
+        }
 
     lines = stderr.strip().splitlines()
     exc_type: Optional[str] = None
@@ -1011,23 +1219,37 @@ def _parse_java_runtime_error(stderr: str) -> Dict[str, Any]:
     }
 
 
-def _run_gcc(source_code: str, language_label: str, compiler: str, source_name: str, timeout: float = 3.0) -> Tuple[List[Issue], Dict[str, Any]]:
+def _run_gcc(
+    source_code: str,
+    language_label: str,
+    compiler: str,
+    source_name: str,
+    timeout: float = 3.0,
+) -> Tuple[List[Issue], Dict[str, Any]]:
     """
     Compile and run C or C++ code using gcc/g++.
     """
     compile_issues: List[Issue] = []
     execution = _empty_execution()
-    run_in_sandbox(source_code, language_label, "gcc:12", [
-        compiler,
-        "{source}",
-        "-o",
-        "{output}",
-    ], timeout=10)
+    run_in_sandbox(
+        source_code,
+        language_label,
+        "gcc:12",
+        [
+            compiler,
+            "{source}",
+            "-o",
+            "{output}",
+        ],
+        timeout=10,
+    )
     execution = dict(run_in_sandbox.last_result)
 
     if execution["returncode"] != 0:
         if not execution["error"] and execution["stderr"]:
-            compile_issues.extend(_parse_gcc_output(execution["stderr"], language_label))
+            compile_issues.extend(
+                _parse_gcc_output(execution["stderr"], language_label)
+            )
             execution["error"] = {
                 "type": "CompileError",
                 "message": "Compilation failed. See errors below.",
@@ -1072,20 +1294,28 @@ def _analyze_cpp(code: str) -> Tuple[List[Issue], Dict[str, Any]]:
     return issues, execution
 
 
-def _analyze_java(code: str, timeout: float = 3.0) -> Tuple[List[Issue], Dict[str, Any]]:
+def _analyze_java(
+    code: str, timeout: float = 3.0
+) -> Tuple[List[Issue], Dict[str, Any]]:
     style_issues = _line_based_checks(code)
     execution = _empty_execution()
     compile_issues: List[Issue] = []
 
-    match = re.search(r'public\s+(?:final\s+)?class\s+(\w+)', code)
-    class_name = match.group(1) if match else "Main"
+    match = re.search(r"public\s+(?:final\s+)?class\s+(\w+)", code)
+    _class_name = match.group(1) if match else "Main"
 
-    run_in_sandbox(code, "java", "openjdk:17-slim", [
-        "javac",
-        "-d",
-        "{classes}",
-        "{source}",
-    ], timeout=10)
+    run_in_sandbox(
+        code,
+        "java",
+        "openjdk:17-slim",
+        [
+            "javac",
+            "-d",
+            "{classes}",
+            "{source}",
+        ],
+        timeout=10,
+    )
     execution = dict(run_in_sandbox.last_result)
 
     if execution["returncode"] != 0:
@@ -1105,12 +1335,18 @@ def _analyze_java(code: str, timeout: float = 3.0) -> Tuple[List[Issue], Dict[st
         issues = style_issues + compile_issues
         return issues, execution
 
-    run_in_sandbox(code, "java", "openjdk:17-slim", [
+    run_in_sandbox(
+        code,
         "java",
-        "-cp",
-        "{classes}",
-        "{main_class}",
-    ], timeout=10)
+        "openjdk:17-slim",
+        [
+            "java",
+            "-cp",
+            "{classes}",
+            "{main_class}",
+        ],
+        timeout=10,
+    )
     execution = dict(run_in_sandbox.last_result)
 
     if execution["returncode"] != 0 and not execution["error"] and execution["stderr"]:
@@ -1120,7 +1356,9 @@ def _analyze_java(code: str, timeout: float = 3.0) -> Tuple[List[Issue], Dict[st
     return issues, execution
 
 
-def _analyze_language_not_yet_supported(language: str) -> Tuple[List[Issue], Dict[str, Any]]:
+def _analyze_language_not_yet_supported(
+    language: str,
+) -> Tuple[List[Issue], Dict[str, Any]]:
     issues: List[Issue] = [
         Issue(
             line=1,
@@ -1176,7 +1414,11 @@ def _extract_gemini_text(response_json: Dict[str, Any]) -> Optional[str]:
         if not isinstance(parts, list):
             continue
         for part in parts:
-            if isinstance(part, dict) and isinstance(part.get("text"), str) and part["text"].strip():
+            if (
+                isinstance(part, dict)
+                and isinstance(part.get("text"), str)
+                and part["text"].strip()
+            ):
                 return part["text"].strip()
     return None
 
@@ -1198,7 +1440,26 @@ def _map_gemini_http_error(status_code: int, body_text: str, error_message: str)
     return "AI_MENTOR_API_ERROR"
 
 
-async def _get_ai_mentorship(code: str, language: str, execution: dict, issues: List[dict], difficulty: str = "beginner") -> str:
+MAX_GLOBAL_AI_CALLS_PER_DAY = int(os.environ.get("MAX_GLOBAL_AI_CALLS_PER_DAY", "5000"))
+MAX_AI_CODE_CHARS = 4000
+
+_AI_MENTOR_CACHE: OrderedDict = OrderedDict()
+_AI_MENTOR_CACHE_SIZE = 500
+
+_logger = logging.getLogger("app_pkg")
+
+
+async def _get_ai_mentorship(
+    code: str,
+    language: str,
+    execution: dict,
+    issues: List[dict],
+    difficulty: str = "beginner",
+) -> str:
+    # 1. Global Daily Circuit Breaker
+    if SECURITY_METRICS.get("ai_mentor_calls_made", 0) >= MAX_GLOBAL_AI_CALLS_PER_DAY:
+        return "Daily AI quota reached to protect server resources. Try again tomorrow or fix the code using compiler output."
+
     api_key = _get_valid_gemini_api_key()
     if not api_key:
         return "AI_MENTOR_DISABLED"
@@ -1207,42 +1468,61 @@ async def _get_ai_mentorship(code: str, language: str, execution: dict, issues: 
         # Build comprehensive error context including all issues and execution errors
         error_context = ""
         all_errors = []
-        
+
         # Collect static issues (compilation, syntax errors, etc.)
-        static_errors = [i for i in issues if i.get('severity') == 'error']
+        static_errors = [i for i in issues if i.get("severity") == "error"]
         for iss in static_errors:
-            all_errors.append({
-                'line': iss.get('line'),
-                'type': iss.get('code', 'ERROR'),
-                'message': iss.get('message'),
-                'severity': 'error'
-            })
+            all_errors.append(
+                {
+                    "line": iss.get("line"),
+                    "type": iss.get("code", "ERROR"),
+                    "message": iss.get("message"),
+                    "severity": "error",
+                }
+            )
             error_context += f"Line {iss.get('line')}: {iss.get('message')}\n"
-        
+
         # Add execution/runtime errors
-        if execution.get('error'):
-            exec_error = execution['error']
-            error_line = exec_error.get('line', '?')
-            all_errors.append({
-                'line': error_line,
-                'type': exec_error.get('type', 'RuntimeError'),
-                'message': exec_error.get('message', ''),
-                'explanation': exec_error.get('explanation', ''),
-                'severity': 'error'
-            })
+        if execution.get("error"):
+            exec_error = execution["error"]
+            error_line = exec_error.get("line", "?")
+            all_errors.append(
+                {
+                    "line": error_line,
+                    "type": exec_error.get("type", "RuntimeError"),
+                    "message": exec_error.get("message", ""),
+                    "explanation": exec_error.get("explanation", ""),
+                    "severity": "error",
+                }
+            )
             error_context += f"Line {error_line}: {exec_error.get('type')} - {exec_error.get('message')}\n"
-        
+
         # If no errors, check for warnings
         if not all_errors:
-            warnings = [i for i in issues if i.get('severity') == 'warning']
+            warnings = [i for i in issues if i.get("severity") == "warning"]
             for warn in warnings:
                 error_context += f"Line {warn.get('line')}: {warn.get('message')}\n"
-        
+
         # If there are any issues/errors, generate AI feedback
         if all_errors or error_context:
+            # Check LRU cache first to save quota
+            safe_code = code[:MAX_AI_CODE_CHARS]
+            has_truncation = len(code) > MAX_AI_CODE_CHARS
+
+            cache_key_str = f"{safe_code}:{language}:{difficulty}:{error_context}"
+            cache_key = hashlib.sha256(cache_key_str.encode("utf-8")).hexdigest()
+            if cache_key in _AI_MENTOR_CACHE:
+                # Move to end to indicate recent use (LRU logic)
+                res = _AI_MENTOR_CACHE.pop(cache_key)
+                _AI_MENTOR_CACHE[cache_key] = res
+                return res
+
+            if has_truncation:
+                safe_code += "\n... [TRUNCATED DUE TO LENGTH BUDGET]"
+
             # Number each source line so the model can cite them precisely
             numbered_lines = "\n".join(
-                f"{i}: {line}" for i, line in enumerate(code.splitlines(), start=1)
+                f"{i}: {line}" for i, line in enumerate(safe_code.splitlines(), start=1)
             )
 
             # Generate difficulty-specific prompt
@@ -1304,6 +1584,10 @@ async def _get_ai_mentorship(code: str, language: str, execution: dict, issues: 
                 ]
             }
 
+            SECURITY_METRICS["ai_mentor_calls_made"] = (
+                SECURITY_METRICS.get("ai_mentor_calls_made", 0) + 1
+            )
+
             _MAX_RETRIES = 3
             async with httpx.AsyncClient(timeout=15.0) as client:
                 for _attempt in range(_MAX_RETRIES):
@@ -1312,15 +1596,18 @@ async def _get_ai_mentorship(code: str, language: str, execution: dict, issues: 
                         status_code = response.status_code
                         raw_body = response.text
                         if status_code == 429 and _attempt < _MAX_RETRIES - 1:
-                            backoff = 2 ** _attempt
-                            print(f"[Gemini] Rate limited (429). Retrying in {backoff}s...", file=sys.stderr)
+                            backoff = 2**_attempt
+                            print(
+                                f"[Gemini] Rate limited (429). Retrying in {backoff}s...",
+                                file=sys.stderr,
+                            )
                             await asyncio.sleep(backoff)
                             continue
                         break
                     except httpx.RequestError as exc:
                         print(f"[Gemini] Network error: {exc}", file=sys.stderr)
                         return "AI_MENTOR_API_ERROR"
-                    
+
             if status_code < 200 or status_code >= 300:
                 print(f"[Gemini] Unexpected status: {status_code}", file=sys.stderr)
                 return "AI_MENTOR_API_ERROR"
@@ -1336,7 +1623,31 @@ async def _get_ai_mentorship(code: str, language: str, execution: dict, issues: 
                 return "AI_MENTOR_BAD_RESPONSE"
 
             feedback_text = _extract_gemini_text(parsed)
+
+            # Usage tracking (Quota Management)
+            try:
+                usage = parsed.get("usageMetadata", {})
+                if usage:
+                    total_tokens = int(usage.get("totalTokenCount", 0))
+                    SECURITY_METRICS["ai_mentor_tokens_used"] = (
+                        SECURITY_METRICS.get("ai_mentor_tokens_used", 0) + total_tokens
+                    )
+                    _logger.info(
+                        "gemini_api_usage",
+                        extra={
+                            "prompt_tokens": usage.get("promptTokenCount", 0),
+                            "candidates_tokens": usage.get("candidatesTokenCount", 0),
+                            "total_tokens": total_tokens,
+                        },
+                    )
+            except Exception as e:
+                _logger.warning("Failed to parse usageMetadata", exc_info=e)
+
             if feedback_text:
+                # Store in LRU cache
+                _AI_MENTOR_CACHE[cache_key] = feedback_text
+                if len(_AI_MENTOR_CACHE) > _AI_MENTOR_CACHE_SIZE:
+                    _AI_MENTOR_CACHE.popitem(last=False)
                 return feedback_text
 
             return "LOOKS_GOOD"
@@ -1348,11 +1659,14 @@ async def _get_ai_mentorship(code: str, language: str, execution: dict, issues: 
         print(f"[Gemini] Error with AI Mentor: {err_msg}", file=sys.stderr)
         return "AI_MENTOR_DISABLED"
 
-async def analyze_code(code: str, language: str = "python", difficulty: str = "beginner") -> Dict[str, Any]:
+
+async def analyze_code(
+    code: str, language: str = "python", difficulty: str = "beginner"
+) -> Dict[str, Any]:
     """
     Analyze source code and return a structured result.
     Runs subprocess execute functions in an isolated thread.
-    
+
     Args:
         code: The source code to analyze
         language: Programming language (python, javascript, java, c, cpp)
@@ -1401,7 +1715,9 @@ async def analyze_code(code: str, language: str = "python", difficulty: str = "b
         issues, execution = await asyncio.to_thread(_analyze_python, code, difficulty)
     elif language in {"javascript", "js"}:
         language = "javascript"
-        issues, execution = await asyncio.to_thread(_analyze_javascript, code, difficulty)
+        issues, execution = await asyncio.to_thread(
+            _analyze_javascript, code, difficulty
+        )
     elif language == "java":
         issues, execution = await asyncio.to_thread(_analyze_java, code)
     elif language == "c":
@@ -1410,17 +1726,18 @@ async def analyze_code(code: str, language: str = "python", difficulty: str = "b
         language = "cpp"
         issues, execution = await asyncio.to_thread(_analyze_cpp, code)
     else:
-        issues, execution = await asyncio.to_thread(_analyze_language_not_yet_supported, language)
+        issues, execution = await asyncio.to_thread(
+            _analyze_language_not_yet_supported, language
+        )
 
     issues_dicts = [
         {"line": i.line, "severity": i.severity, "code": i.code, "message": i.message}
         for i in issues
     ]
 
-    error_details = execution.get("error")
-    errors_from_issues = [i for i in issues_dicts if i["severity"] == "error"]
-
-    ai_mentor_feedback = await _get_ai_mentorship(code, language, execution, issues_dicts, difficulty=difficulty)
+    ai_mentor_feedback = await _get_ai_mentorship(
+        code, language, execution, issues_dicts, difficulty=difficulty
+    )
 
     result: Dict[str, Any] = {
         "ok": True,
@@ -1436,3 +1753,79 @@ async def analyze_code(code: str, language: str = "python", difficulty: str = "b
 
     return result
 
+
+async def analyze_repository(repo_url: str) -> Dict[str, Any]:
+    """
+    Shallow clone a github repository and statically analyze its architecture.
+    """
+    if not isinstance(repo_url, str) or not repo_url.startswith("https://github.com/"):
+        return {"ok": False, "error": "Invalid GitHub repository URL."}
+
+    api_key = _get_valid_gemini_api_key()
+    if not api_key:
+        return {"ok": False, "error": "AI_MENTOR_DISABLED"}
+
+    # Allowed extensions to analyze
+    allowed_exts = {".py", ".js", ".ts", ".jsx", ".tsx", ".java", ".c", ".cpp", ".h", ".hpp"}
+    
+    with tempfile.TemporaryDirectory() as tmp_dir:
+        # Clone repo
+        from subprocess import run, TimeoutExpired # nosec B404
+        try:
+            run(["git", "clone", "--depth", "1", repo_url, "."], cwd=tmp_dir, capture_output=True, text=True, timeout=30, check=True) # nosec B603 B607
+        except TimeoutExpired:
+            return {"ok": False, "error": "Cloning repository timed out."}
+        except Exception as e:
+            return {"ok": False, "error": f"Failed to clone repository: {str(e)}"}
+            
+        # Collect file contents
+        combined_code = []
+        total_size = 0
+        MAX_SIZE = 500 * 1024 # 500 KB limit for the prompt
+        
+        for root, dirs, files in os.walk(tmp_dir):
+            if ".git" in dirs:
+                dirs.remove(".git")
+            for file in files:
+                ext = os.path.splitext(file)[1].lower()
+                if ext in allowed_exts:
+                    path = os.path.join(root, file)
+                    rel_path = os.path.relpath(path, tmp_dir)
+                    try:
+                        with open(path, "r", encoding="utf-8") as f:
+                            content = f.read()
+                            if total_size + len(content) > MAX_SIZE:
+                                continue # skip big files if over limit
+                            combined_code.append(f"\n--- {rel_path} ---\n{content}")
+                            total_size += len(content)
+                    except Exception:
+                        pass
+        
+        prompt = (
+            "You are an expert Software Architect providing a comprehensive architectural review.\n"
+            "I have provided the source code of a GitHub repository below.\n"
+            "Analyze the codebase and provide:\n"
+            "1. An executive summary of what this code does.\n"
+            "2. An architectural overview (patterns used, file structure meaning).\n"
+            "3. Key improvement areas or code quality feedback.\n"
+            "Use Markdown format. Do NOT execute the code, just perform static analysis.\n\n"
+            "Code files:\n" + "".join(combined_code)
+        )
+        
+        endpoint = (
+            "https://generativelanguage.googleapis.com/v1beta/"
+            f"models/gemini-2.5-flash-preview-04-17:generateContent?key={urllib.parse.quote_plus(api_key)}"
+        )
+        payload = {"contents": [{"parts": [{"text": prompt}]}]}
+        
+        try:
+            async with httpx.AsyncClient(timeout=45.0) as client:
+                response = await client.post(endpoint, json=payload)
+                if response.status_code >= 300:
+                    return {"ok": False, "error": "Failed to generate AI analysis."}
+                
+                parsed = response.json()
+                feedback = _extract_gemini_text(parsed)
+                return {"ok": True, "ai_mentor_feedback": feedback or "No feedback generated."}
+        except Exception as e:
+            return {"ok": False, "error": f"AI Request failed: {str(e)}"}

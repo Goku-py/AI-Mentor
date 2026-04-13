@@ -8,9 +8,11 @@ __pycache__
 .git
 .pytest_cache
 .env
-.env.local
+.env.*
 tests
 *.md
 .vscode
 .idea
 dist
+instance/
+*.db

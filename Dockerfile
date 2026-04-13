@@ -14,12 +14,15 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
 
 WORKDIR /app
 
-# Install Python dependencies
-COPY requirements.txt .
+# Install Python dependencies from the locked deterministic state
+COPY requirements.lock requirements.txt
 RUN pip install --no-cache-dir -r requirements.txt
 
-# Copy application code
+# Copy core files
 COPY app.py analyzer.py ./
+COPY app_pkg/ app_pkg/
+COPY models_pkg/ models_pkg/
+COPY migrations/ migrations/
 
 # Build frontend
 COPY package.json package-lock.json ./
@@ -29,6 +32,10 @@ COPY src/ src/
 RUN npx vite build
 # Remove devDependencies after build to keep image lean
 RUN npm prune --omit=dev
+
+# Create a non-root user for security and own the app directory
+RUN useradd -m appuser && chown -R appuser:appuser /app
+USER appuser
 
 # Expose a default port
 EXPOSE 5000
