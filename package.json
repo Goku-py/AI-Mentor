@@ -14,7 +14,9 @@
     "server": "python app.py",
     "client": "vite",
     "typecheck": "tsc --noEmit",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test",
+    "test:testsprite:backend": "powershell -ExecutionPolicy Bypass -File scripts/verify-backend-api.ps1",
+    "test:testsprite:setup": "powershell -ExecutionPolicy Bypass -File scripts/setup-testsprite-env.ps1"
   },
   "dependencies": {
     "prismjs": "^1.30.0",
