@@ -17,7 +17,7 @@ AI Code Mentor is a web app where students write code in a browser editor, run i
 | Feature | Description |
 |---------|-------------|
 | Code editor | Syntax-highlighted editor with language selector |
-| Run Code | POST analyze → execution + static issues + AI feedback |
+| Run | POST analyze → execution + static issues + AI feedback |
 | Theme | Light/dark mode toggle |
 | Auth | Email/password register & login; optional GitHub OAuth |
 | History | Authenticated users can view/clear analyze history |
@@ -25,7 +25,7 @@ AI Code Mentor is a web app where students write code in a browser editor, run i
 
 ## User flows
 
-1. **Guest** — Open app → select language → type code → Run Code → see output (rate-limited by IP).
+1. **Guest** — Open app → select language → type code → Run → see output (rate-limited by IP).
 2. **Register** — Sign In → Create account → submit → logged in with JWT.
 3. **Login** — Sign In → credentials → modal closes → user badge visible.
 4. **Run while logged in** — Analyze uses user-scoped rate limits; history recorded.
@@ -33,7 +33,7 @@ AI Code Mentor is a web app where students write code in a browser editor, run i
 
 ## Validation criteria
 
-- Editor and Run Code button visible on load.
+- Editor and Run button visible on load.
 - Valid Python `print('hello')` shows `hello` in output when backend is up.
 - Invalid login shows error in auth modal (no silent success).
 - Health endpoint returns `status` and `available_tools`.

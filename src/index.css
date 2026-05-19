@@ -1068,22 +1068,3 @@ body {
 .light-mode .auth-github-btn:hover {
   background-color: #1b1f24;
 }
-
-.repo-input {
-  background: var(--bg-color);
-  border: 1px solid var(--border-color);
-  color: var(--text-primary);
-  padding: 0.45rem 0.6rem;
-  border-radius: 6px;
-  font-family: var(--font-sans);
-  font-size: 0.85rem;
-  width: 200px;
-}
-.repo-input:focus {
-  outline: none;
-  border-color: var(--primary-accent);
-}
-
-.light-mode .repo-input {
-  background: #ffffff;
-}

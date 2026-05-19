@@ -197,11 +197,35 @@ class TestAnalyzeCode:
         assert "issues" in result
         assert "execution" in result
         assert "ai_mentor_feedback" in result
+        assert "ai_mentor_status" in result
 
         assert "line_count" in result["summary"]
         assert "issue_count" in result["summary"]
 
         assert isinstance(result["issues"], list)
+
+    @pytest.mark.asyncio
+    @pytest.mark.parametrize(
+        ("feedback", "status"),
+        [
+            ("AI_MENTOR_DISABLED", "disabled"),
+            ("AI_MENTOR_API_ERROR", "api_error"),
+            ("AI_MENTOR_QUOTA_EXCEEDED", "quota_exceeded"),
+            ("AI_MENTOR_BAD_RESPONSE", "bad_response"),
+        ],
+    )
+    async def test_ai_mentor_status_maps_stable_failure_states(
+        self, monkeypatch, feedback, status
+    ):
+        """Analyze response should expose stable AI status metadata."""
+
+        async def fake_mentorship(*_args, **_kwargs):
+            return feedback
+
+        monkeypatch.setattr(analyzer, "_get_ai_mentorship", fake_mentorship)
+        result = await analyze_code("print('x')", "python")
+        assert result["ai_mentor_feedback"] == feedback
+        assert result["ai_mentor_status"] == status
 
 
 class TestLanguageMismatchDetection:

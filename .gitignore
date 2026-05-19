@@ -31,6 +31,7 @@ htmlcov/
 .tox/
 *,cover
 testsprite_tests/
+test-results/
 
 # TestSprite MCP (local config may contain credentials)
 .cursor/mcp.json

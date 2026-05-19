@@ -36,9 +36,11 @@ def debug_gemini_status():
             }
         ), 200
 
+    gemini_model = (os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash").strip()
     endpoint = (
         "https://generativelanguage.googleapis.com/v1beta/"
-        f"models/gemini-2.5-flash-preview-04-17:generateContent?key={urllib.parse.quote_plus(api_key)}"
+        f"models/{urllib.parse.quote_plus(gemini_model)}:generateContent"
+        f"?key={urllib.parse.quote_plus(api_key)}"
     )
     payload = {"contents": [{"parts": [{"text": "Say 'test' only."}]}]}
 

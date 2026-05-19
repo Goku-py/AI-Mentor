@@ -21,7 +21,7 @@ from flask_jwt_extended import get_jwt_identity, jwt_required, verify_jwt_in_req
 from flask_limiter.util import get_remote_address
 from sqlalchemy import text
 
-from analyzer import analyze_code, analyze_repository, sandbox_runtime_status, verify_tools
+from analyzer import analyze_code, sandbox_runtime_status, verify_tools
 from app_pkg.extensions import csrf, db, limiter
 from app_pkg.security.middleware import SECURITY_METRICS, contains_abuse_pattern
 from models_pkg import AuditLog
@@ -337,46 +337,5 @@ def analyze():
         return jsonify(
             {"ok": False, "error": "Internal server error during analysis."}
         ), 500
-    finally:
-        _ANALYZE_SEMAPHORE.release()
-
-
-@api_bp.route("/analyze/github", methods=["POST"])
-@jwt_required(optional=True)
-@limiter.limit("5 per minute; 50 per day", key_func=_analyze_rate_limit_key)
-def analyze_github():
-    from flask import current_app
-
-    payload = request.get_json(silent=True) or {}
-    _raw_identity = get_jwt_identity()
-    current_user_id = int(_raw_identity) if _raw_identity else None
-
-    repo_url = payload.get("repo_url")
-    if not isinstance(repo_url, str) or not repo_url.startswith("https://github.com/"):
-        return jsonify({"ok": False, "error": "Invalid GitHub repository URL."}), 400
-
-    acquired = _ANALYZE_SEMAPHORE.acquire(blocking=False)
-    if not acquired:
-        SECURITY_METRICS["concurrency_rejections"] += 1
-        return jsonify({"ok": False, "error": "Server is busy. Please retry shortly."}), 503
-        
-    try:
-        result = asyncio.run(analyze_repository(repo_url))
-        
-        # Log to audit (shallow)
-        _write_audit_log(
-            current_user_id,
-            "github_repo",
-            repo_url,
-            had_error=not result.get("ok", False)
-        )
-        
-        if not result.get("ok"):
-            return jsonify(result), 400
-            
-        return jsonify(result), 200
-    except Exception as exc:  # pragma: no cover
-        current_app.logger.exception("Error during github repo analysis: %s", exc)
-        return jsonify({"ok": False, "error": "Internal server error during analysis."}), 500
     finally:
         _ANALYZE_SEMAPHORE.release()

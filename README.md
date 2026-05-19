@@ -81,7 +81,7 @@ npm run dev
 http://localhost:5173
 ```
 
-Select a language, type some code, and click **Run Code**. That's it!
+Select a language, type some code, and click **Run**. That's it!
 
 > [!NOTE]
 > Want to run Java or C/C++ as well? You'll need to install a Java or C compiler separately — but Python and JavaScript work right away without anything extra.

@@ -1445,6 +1445,19 @@ def _map_gemini_http_error(status_code: int, body_text: str, error_message: str)
     return "AI_MENTOR_API_ERROR"
 
 
+def _ai_mentor_status_from_feedback(feedback: str) -> str:
+    """Map legacy feedback sentinels to a small stable API status."""
+    if feedback == "AI_MENTOR_DISABLED":
+        return "disabled"
+    if feedback == "AI_MENTOR_QUOTA_EXCEEDED":
+        return "quota_exceeded"
+    if feedback == "AI_MENTOR_BAD_RESPONSE":
+        return "bad_response"
+    if feedback == "AI_MENTOR_API_ERROR":
+        return "api_error"
+    return "ok"
+
+
 MAX_GLOBAL_AI_CALLS_PER_DAY = int(os.environ.get("MAX_GLOBAL_AI_CALLS_PER_DAY", "5000"))
 MAX_AI_CODE_CHARS = 4000
 
@@ -1463,7 +1476,7 @@ async def _get_ai_mentorship(
 ) -> str:
     # 1. Global Daily Circuit Breaker
     if SECURITY_METRICS.get("ai_mentor_calls_made", 0) >= MAX_GLOBAL_AI_CALLS_PER_DAY:
-        return "Daily AI quota reached to protect server resources. Try again tomorrow or fix the code using compiler output."
+        return "AI_MENTOR_QUOTA_EXCEEDED"
 
     api_key = _get_valid_gemini_api_key()
     if not api_key:
@@ -1573,9 +1586,11 @@ async def _get_ai_mentorship(
                     f"```\n{numbered_lines}\n```"
                 )
 
+            gemini_model = (os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash").strip()
             endpoint = (
                 "https://generativelanguage.googleapis.com/v1beta/"
-                f"models/gemini-2.5-flash-preview-04-17:generateContent?key={urllib.parse.quote_plus(api_key)}"
+                f"models/{urllib.parse.quote_plus(gemini_model)}:generateContent"
+                f"?key={urllib.parse.quote_plus(api_key)}"
             )
             payload = {
                 "contents": [
@@ -1615,7 +1630,7 @@ async def _get_ai_mentorship(
 
             if status_code < 200 or status_code >= 300:
                 print(f"[Gemini] Unexpected status: {status_code}", file=sys.stderr)
-                return "AI_MENTOR_API_ERROR"
+                return _map_gemini_http_error(status_code, raw_body, "")
 
             try:
                 parsed = json.loads(raw_body)
@@ -1655,7 +1670,7 @@ async def _get_ai_mentorship(
                     _AI_MENTOR_CACHE.popitem(last=False)
                 return feedback_text
 
-            return "LOOKS_GOOD"
+            return "AI_MENTOR_BAD_RESPONSE"
         else:
             # No errors found
             return "LOOKS_GOOD"
@@ -1711,6 +1726,7 @@ async def analyze_code(
                 f"You selected {selected} but your code appears to be written in {detected}. "
                 "Please switch the language dropdown or rewrite your code in the correct language."
             ),
+            "ai_mentor_status": "ok",
             "issues": [],
             "execution": _empty_execution(),
         }
@@ -1748,6 +1764,7 @@ async def analyze_code(
     ai_mentor_feedback = await _get_ai_mentorship(
         code, language, execution, issues_dicts, difficulty=difficulty
     )
+    ai_mentor_status = _ai_mentor_status_from_feedback(ai_mentor_feedback)
 
     result: Dict[str, Any] = {
         "ok": True,
@@ -1759,6 +1776,7 @@ async def analyze_code(
         "issues": issues_dicts,
         "execution": execution,
         "ai_mentor_feedback": ai_mentor_feedback,
+        "ai_mentor_status": ai_mentor_status,
     }
     # Ensure 'execution' key always exists and is a dict (not None)
     if result.get("execution") is None:
@@ -1782,20 +1800,3 @@ async def analyze_code(
 
     # Return a plain dict (no wrapper) to avoid surprises for callers
     return dict(result)
-
-
-async def analyze_repository(repo_url: str) -> Dict[str, Any]:
-    """Minimal stub for repository analysis used in tests.
-
-    This is intentionally lightweight for test environments where full
-    GitHub access or repository analysis is unnecessary. It returns a
-    consistent structure so call sites can handle the result without
-    import-time failures.
-    """
-    if not isinstance(repo_url, str) or not repo_url.startswith("https://github.com/"):
-        return {"ok": False, "error": "Invalid GitHub repository URL."}
-
-    return {
-        "ok": False,
-        "error": "analyze_repository is not implemented in the test environment",
-    }

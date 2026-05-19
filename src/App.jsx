@@ -104,6 +104,56 @@ const DEFAULT_CODE = {
     cpp: '#include <iostream>\nusing namespace std;\n\nint main() {\n    cout << "Hello World!" << endl;\n    return 0;\n}',
 };
 
+const inferAiMentorStatus = (feedback) => {
+    if (feedback === 'AI_MENTOR_DISABLED') return 'disabled';
+    if (feedback === 'AI_MENTOR_QUOTA_EXCEEDED') return 'quota_exceeded';
+    if (feedback === 'AI_MENTOR_BAD_RESPONSE') return 'bad_response';
+    if (feedback === 'AI_MENTOR_API_ERROR' || feedback === 'AI_MENTOR_API_DISABLED') return 'api_error';
+    return 'ok';
+};
+
+const hasExecutionError = (execution) => {
+    const error = execution?.error;
+    return Boolean(error && (typeof error !== 'object' || Object.keys(error).length > 0));
+};
+
+const formatExecutionError = (execution, fallback = 'An execution error occurred.') => {
+    const error = execution?.error;
+    if (error?.type === 'SandboxUnavailable') {
+        return [
+            'Sandbox unavailable: Docker is not available for code execution on this server.',
+            error.explanation || 'Production must run untrusted code inside Docker.',
+            'For local development, start Docker or set ALLOW_HOST_EXECUTION_FALLBACK=1.'
+        ].join('\n');
+    }
+    if (error?.type === 'ToolNotFound') {
+        return [
+            'Required language toolchain is not installed on this server.',
+            error.explanation || 'Install the runtime/compiler for the selected language and try again.'
+        ].join('\n');
+    }
+    return execution?.stderr || error?.message || fallback;
+};
+
+const aiMentorStatusCopy = {
+    disabled: {
+        title: 'AI Mentor is disabled.',
+        body: 'Set GEMINI_API_KEY in the server environment to enable AI guidance.'
+    },
+    api_error: {
+        title: 'AI Mentor could not reach Gemini.',
+        body: 'Check GEMINI_API_KEY, GEMINI_MODEL, and whether the Gemini API is enabled for the key.'
+    },
+    quota_exceeded: {
+        title: 'AI Mentor quota is exhausted.',
+        body: 'Use the compiler output for now, then try again after the quota window resets.'
+    },
+    bad_response: {
+        title: 'AI Mentor returned an unreadable response.',
+        body: 'The code still ran; retry once, or check the server logs if this keeps happening.'
+    }
+};
+
 export default function App() {
     const [code, setCode] = useState(DEFAULT_CODE.python);
     const [language, setLanguage] = useState('python');
@@ -138,6 +188,7 @@ export default function App() {
     const [output, setOutput] = useState('');
     const [errorMsg, setErrorMsg] = useState('');
     const [mentorFeedback, setMentorFeedback] = useState('');
+    const [aiMentorStatus, setAiMentorStatus] = useState('ok');
     const [issues, setIssues] = useState([]);
     const [mismatchInfo, setMismatchInfo] = useState(null);
 
@@ -312,6 +363,7 @@ export default function App() {
         setOutput('');
         setErrorMsg('');
         setMentorFeedback('AI Mentor analyzing...');
+        setAiMentorStatus('ok');
         setIssues([]);
         setErrorLine(null);
         setMismatchInfo(null);
@@ -371,13 +423,11 @@ export default function App() {
 
             if (!data.mismatch && data.execution) {
                 const stdout = data.execution.stdout || '';
-                const stderr = data.execution.stderr || '';
-
                 setOutput(stdout);
 
                 const hasErrorIssues = data.issues && data.issues.some(i => i.severity === 'error');
-                if (data.execution.error || data.execution.returncode !== 0 || hasErrorIssues) {
-                    setErrorMsg(stderr || data.execution.error?.message || "An execution error occurred.");
+                if (hasExecutionError(data.execution) || data.execution.returncode !== 0 || hasErrorIssues) {
+                    setErrorMsg(formatExecutionError(data.execution));
                 }
             } else if (!data.mismatch && !data.ok) {
                 setErrorMsg(data.error || "Analysis failed.");
@@ -394,8 +444,10 @@ export default function App() {
             // Fetch AI Mentor Feedback asynchronously in the background
             if (data.ai_mentor_feedback) {
                 setMentorFeedback(data.ai_mentor_feedback);
+                setAiMentorStatus(data.ai_mentor_status || inferAiMentorStatus(data.ai_mentor_feedback));
             } else {
                 setMentorFeedback('');
+                setAiMentorStatus(data.ai_mentor_status || 'ok');
             }
         } catch (err) {
             setErrorMsg("Network error: Make sure the Python backend (app.py) is running on port 5000.");
@@ -424,6 +476,7 @@ export default function App() {
         setOutput('');
         setErrorMsg('');
         setMentorFeedback('');
+        setAiMentorStatus('ok');
         setIssues([]);
     };
     const handleShare = async () => {
@@ -741,19 +794,12 @@ export default function App() {
                         <div className="pane-content mentor-content">
                             {isAnalyzing ? (
                                 <div className="placeholder-text">Analyzing code ...</div>
-                            ) : mentorFeedback && mentorFeedback === "AI_MENTOR_DISABLED" ? (
-                                <div className="placeholder-text">
-                                    <SparklesIcon />
-                                    AI Mentor is disabled.
-                                    <br />
-                                    (Set GEMINI_API_KEY in .env to enable)
-                                </div>
-                            ) : mentorFeedback && mentorFeedback === "AI_MENTOR_API_ERROR" ? (
+                            ) : aiMentorStatus !== 'ok' ? (
                                 <div className="placeholder-text" style={{ color: 'var(--warning)' }}>
                                     <SparklesIcon />
-                                    AI Mentor API error.
+                                    {aiMentorStatusCopy[aiMentorStatus]?.title || 'AI Mentor is unavailable.'}
                                     <br />
-                                    Check if API key is valid and not rate-limited.
+                                    {aiMentorStatusCopy[aiMentorStatus]?.body || 'Check the server AI configuration and try again.'}
                                 </div>
                             ) : mentorFeedback && !mentorFeedback.includes("LOOKS_GOOD") ? (
                                 <div>{renderMarkdown(mentorFeedback)}</div>

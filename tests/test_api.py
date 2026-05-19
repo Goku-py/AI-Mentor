@@ -128,6 +128,16 @@ class TestAnalyzeEndpoint:
         )
         data = json.loads(response.data)
         assert "ai_mentor_feedback" in data
+        assert data["ai_mentor_status"] == "ok"
+
+    def test_github_repo_analysis_endpoint_removed(self, client):
+        """Repository analysis is not part of the public API."""
+        response = client.post(
+            "/api/v1/analyze/github",
+            data=json.dumps({"repo_url": "https://github.com/example/repo"}),
+            content_type="application/json",
+        )
+        assert response.status_code in (404, 405)
 
     def test_analyze_with_syntax_error(self, client):
         """Analyze should handle syntax errors gracefully."""
