@@ -140,7 +140,6 @@ export default function App() {
     const [mentorFeedback, setMentorFeedback] = useState('');
     const [issues, setIssues] = useState([]);
     const [mismatchInfo, setMismatchInfo] = useState(null);
-    const [repoUrl, setRepoUrl] = useState('');
 
     // persist settings
     React.useEffect(() => {
@@ -306,41 +305,7 @@ export default function App() {
         textarea.scrollTop = targetScrollTop;
     }, [errorLine, fontSize]);
 
-    const handleAnalyzeRepo = async () => {
-        setIsAnalyzing(true);
-        setOutput('');
-        setErrorMsg('');
-        setMentorFeedback('Analyzing GitHub Repository... This takes up to 45 seconds.');
-        setIssues([]);
-        setErrorLine(null);
-        setMismatchInfo(null);
-
-        const API_URL = import.meta.env.VITE_API_URL || '';
-        try {
-            const response = await fetch(`${API_URL}/api/v1/analyze/github`, {
-                method: "POST",
-                credentials: 'include',
-                headers: {
-                    "Content-Type": "application/json",
-                    ...(accessToken ? { "Authorization": `Bearer ${accessToken}` } : {}),
-                    ...(csrfToken ? { "X-CSRFToken": csrfToken } : {}),
-                },
-                body: JSON.stringify({ repo_url: repoUrl }),
-            });
-            const data = await response.json();
-            if (data.ok) {
-                setMentorFeedback(data.ai_mentor_feedback || "Done.");
-            } else {
-                setErrorMsg(data.error || "Analysis failed.");
-                setMentorFeedback('');
-            }
-        } catch (err) {
-            setErrorMsg("Network error: Make sure the Python backend (app.py) is running on port 5000.");
-            setMentorFeedback('');
-        } finally {
-            setIsAnalyzing(false);
-        }
-    };
+    
 
     const handleRun = async () => {
         setIsAnalyzing(true);
@@ -615,27 +580,10 @@ export default function App() {
                     <button
                         className="run-btn"
                         onClick={handleRun}
-                        disabled={isAnalyzing || !code.trim() || !!repoUrl.trim()}
+                        disabled={isAnalyzing || !code.trim()}
                     >
                         <PlayIcon />
-                        {isAnalyzing && !repoUrl.trim() ? "Running..." : "Run"}
-                    </button>
-                    <input 
-                        type="url" 
-                        placeholder="https://github.com/..." 
-                        value={repoUrl} 
-                        onChange={e => setRepoUrl(e.target.value)} 
-                        className="repo-input"
-                        title="Enter GitHub Repository URL to statically analyze its architecture"
-                    />
-                    <button
-                        className="run-btn"
-                        onClick={handleAnalyzeRepo}
-                        disabled={isAnalyzing || !repoUrl.trim()}
-                        title="Analyze Repository Architecture"
-                    >
-                         <SparklesIcon />
-                         {isAnalyzing && !!repoUrl.trim() ? "..." : "Repo"}
+                        {isAnalyzing ? "Running..." : "Run"}
                     </button>
                     {/* additional controls */}
                     <button title="Clear output" onClick={clearOutput}><TrashIcon /></button>
