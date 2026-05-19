@@ -1,0 +1,68 @@
+[
+  {
+    "id": "TC101",
+    "title": "Health endpoint returns status",
+    "description": "GET /api/v1/health",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      { "type": "action", "description": "GET /api/v1/health" },
+      { "type": "assertion", "description": "200 with status field" }
+    ]
+  },
+  {
+    "id": "TC102",
+    "title": "Tools endpoint lists languages",
+    "description": "GET /api/v1/tools",
+    "category": "functional",
+    "priority": "Medium",
+    "steps": [
+      { "type": "action", "description": "GET /api/v1/tools" },
+      { "type": "assertion", "description": "available object includes python" }
+    ]
+  },
+  {
+    "id": "TC103",
+    "title": "Analyze valid Python",
+    "description": "POST /api/v1/analyze with print hello",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      { "type": "action", "description": "POST analyze with code print('hello')" },
+      { "type": "assertion", "description": "execution.stdout contains hello" }
+    ]
+  },
+  {
+    "id": "TC104",
+    "title": "Analyze rejects empty code",
+    "description": "POST /api/v1/analyze with empty body",
+    "category": "error handling",
+    "priority": "High",
+    "steps": [
+      { "type": "action", "description": "POST analyze with empty code" },
+      { "type": "assertion", "description": "400 response" }
+    ]
+  },
+  {
+    "id": "TC105",
+    "title": "History requires authentication",
+    "description": "GET /api/v1/history without JWT",
+    "category": "security",
+    "priority": "High",
+    "steps": [
+      { "type": "action", "description": "GET /api/v1/history without Authorization" },
+      { "type": "assertion", "description": "401 response" }
+    ]
+  },
+  {
+    "id": "TC106",
+    "title": "Login returns access token",
+    "description": "POST /api/v1/auth/login with test user",
+    "category": "functional",
+    "priority": "High",
+    "steps": [
+      { "type": "action", "description": "POST login with testsprite credentials" },
+      { "type": "assertion", "description": "200 with access_token" }
+    ]
+  }
+]

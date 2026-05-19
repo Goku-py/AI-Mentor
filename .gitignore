@@ -31,6 +31,12 @@ htmlcov/
 .tox/
 *,cover
 
+# TestSprite MCP (local config may contain credentials)
+.cursor/mcp.json
+testsprite_tests/tmp/
+testsprite_tests/**/__pycache__/
+testsprite_tests/**/*.pyc
+
 # IDE
 .vscode/
 .idea/
@@ -64,3 +70,4 @@ flake8_verification.txt
 js_out.txt
 ts_output.txt
 out.txt
+.ruff_cache/
