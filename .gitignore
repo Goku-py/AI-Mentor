@@ -30,6 +30,7 @@ instance/
 htmlcov/
 .tox/
 *,cover
+testsprite_tests/
 
 # TestSprite MCP (local config may contain credentials)
 .cursor/mcp.json
@@ -61,6 +62,9 @@ Thumbs.db
 # Logs
 logs/
 *.log
+
+# Local tooling caches
+.code-review-graph/
 
 # Large debug / security scan output files (never commit these)
 bandit_output.json
