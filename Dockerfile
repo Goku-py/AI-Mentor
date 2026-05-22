@@ -13,6 +13,7 @@ FROM python:3.11-slim@sha256:a3ab0b966bc4e91546a033e22093cb840908979487a9fc0e6e3
 
 # Suppress interactive prompts during apt-get install
 ENV DEBIAN_FRONTEND=noninteractive
+ENV HOST_EXECUTION_ENABLED=1
 
 # Install system dependencies for code execution (subprocess)
 RUN apt-get update && apt-get install -y --no-install-recommends \
