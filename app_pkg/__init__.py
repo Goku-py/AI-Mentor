@@ -12,21 +12,21 @@ from __future__ import annotations
 
 import os
 
+from dotenv import load_dotenv
 from flask import Flask
 from flask_cors import CORS
 from flask_talisman import Talisman
 from werkzeug.middleware.proxy_fix import ProxyFix
-from dotenv import load_dotenv
 
+from app_pkg.blueprints.api import _refresh_tools, api_bp
+from app_pkg.blueprints.auth import auth_bp
+from app_pkg.blueprints.debug_bp import debug_bp
+from app_pkg.blueprints.static_files import static_bp
+from app_pkg.cli import register_cli
 from app_pkg.config import DevelopmentConfig, config_map
 from app_pkg.extensions import csrf, db, jwt, limiter, migrate
 from app_pkg.observability import init_observability
 from app_pkg.security.middleware import init_security
-from app_pkg.cli import register_cli
-from app_pkg.blueprints.api import api_bp, _refresh_tools
-from app_pkg.blueprints.auth import auth_bp
-from app_pkg.blueprints.debug_bp import debug_bp
-from app_pkg.blueprints.static_files import static_bp
 
 load_dotenv()
 
@@ -75,9 +75,9 @@ def create_app(config=None) -> Flask:
     migrate.init_app(app, db)  # Flask-Migrate (Alembic) — enables 'flask db' commands
 
     _rate_limit_storage = os.environ.get("RATE_LIMIT_STORAGE_URI", "memory://")
-    limiter.init_app(app)
     app.config.setdefault("RATELIMIT_STORAGE_URI", _rate_limit_storage)
-    app.config.setdefault("RATELIMIT_DEFAULT", ["200 per day", "50 per hour"])
+    app.config.setdefault("RATELIMIT_DEFAULT", "200 per day; 50 per hour")
+    limiter.init_app(app)
 
     csrf.init_app(app)
 
@@ -92,7 +92,8 @@ def create_app(config=None) -> Flask:
         app,
         origins=_cors_origins,
         methods=["GET", "POST", "DELETE", "OPTIONS"],
-        allow_headers=["Content-Type", "X-API-Key", "X-CSRFToken"],
+        allow_headers=["Content-Type", "Authorization", "X-API-Key", "X-CSRFToken"],
+        expose_headers=["X-CSRFToken"],
         supports_credentials=True,
         max_age=600,
     )
@@ -109,21 +110,24 @@ def create_app(config=None) -> Flask:
         strict_transport_security_max_age=31536000,
         content_security_policy={
             "default-src": "'self'",
-            "script-src": ["'self'", "'unsafe-inline'"],
+            "base-uri": "'self'",
+            "form-action": "'self'",
+            "script-src": ["'self'"],
             "style-src": ["'self'", "'unsafe-inline'"],
             "img-src": ["'self'", "data:"],
             "font-src": "'self'",
             "connect-src": "'self'",
             "frame-ancestors": "'none'",
+            "manifest-src": "'self'",
         },
         content_security_policy_nonce_in=[],
         referrer_policy="strict-origin-when-cross-origin",
         x_content_type_options=True,
         x_xss_protection=True,
-        feature_policy={
-            "geolocation": "'none'",
-            "microphone": "'none'",
-            "camera": "'none'",
+        permissions_policy={
+            "geolocation": "()",
+            "microphone": "()",
+            "camera": "()",
         },
     )
 
@@ -136,7 +140,6 @@ def create_app(config=None) -> Flask:
     # --- Blueprints ---
     app.register_blueprint(api_bp)
     app.register_blueprint(auth_bp)
-    csrf.exempt(auth_bp)
     app.register_blueprint(debug_bp)
     app.register_blueprint(static_bp)
 

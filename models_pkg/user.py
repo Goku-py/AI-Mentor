@@ -1,8 +1,11 @@
 """models_pkg/user.py — User account model."""
 
 from __future__ import annotations
-from datetime import datetime, timezone
+
+from datetime import UTC, datetime
+
 from werkzeug.security import check_password_hash, generate_password_hash
+
 from .extensions import db
 
 VALID_ROLES: frozenset = frozenset({"student", "teacher", "admin"})
@@ -20,7 +23,7 @@ class User(db.Model):
     role = db.Column(db.String(20), nullable=False, default="student")
     created_at = db.Column(
         db.DateTime(timezone=True),
-        default=lambda: datetime.now(timezone.utc),
+        default=lambda: datetime.now(UTC),
         nullable=False,
     )
     is_active = db.Column(db.Boolean, default=True, nullable=False)

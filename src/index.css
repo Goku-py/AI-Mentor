@@ -389,15 +389,18 @@ body {
 .header .controls>button:not(.run-btn) {
   background: none;
   border: none;
-  color: var(--text-primary);
+  color: var(--text-secondary);
   cursor: pointer;
   font-size: 1rem;
   padding: 0.25rem;
   margin-right: 0.25rem;
+  transition: color 0.2s;
 }
 
-.header .controls>button:not(.run-btn):hover {
-  color: var(--primary-accent);
+.header .controls>button:not(.run-btn):hover,
+.header .controls>button:not(.run-btn):focus-visible {
+  color: var(--text-primary);
+  outline: none;
 }
 
 /* Custom Scrollbar */
@@ -449,11 +452,12 @@ body {
 }
 
 .light-mode button {
-  color: #24292e;
+  color: var(--text-secondary);
 }
 
-.light-mode button:hover {
-  color: #0969da;
+.light-mode button:hover,
+.light-mode button:focus-visible {
+  color: var(--text-primary);
 }
 
 .light-mode .run-btn {
@@ -584,6 +588,72 @@ body {
 .light-mode select:focus {
   border-color: #0969da;
   outline: none;
+}
+
+/* Prism token colors for default dark mode (GitHub-dark inspired) */
+.token.comment,
+.token.prolog,
+.token.doctype,
+.token.cdata {
+  color: #8b949e;
+}
+
+.token.punctuation {
+  color: #c9d1d9;
+}
+
+.token.property,
+.token.tag,
+.token.boolean,
+.token.number,
+.token.constant,
+.token.symbol,
+.token.deleted {
+  color: #ff7b72;
+}
+
+.token.selector,
+.token.attr-name,
+.token.string,
+.token.char,
+.token.builtin,
+.token.inserted {
+  color: #7ee787;
+}
+
+.token.operator,
+.token.entity,
+.token.url,
+.language-css .token.string,
+.style .token.string {
+  color: #79c0ff;
+  background: transparent;
+}
+
+.token.atrule,
+.token.attr-value,
+.token.keyword {
+  color: #ff7b72;
+}
+
+.token.function,
+.token.class-name {
+  color: #d2a8ff;
+}
+
+.token.regex,
+.token.important,
+.token.variable {
+  color: #ffa657;
+}
+
+.token.important,
+.token.bold {
+  font-weight: bold;
+}
+
+.token.italic {
+  font-style: italic;
 }
 
 /* Prism token overrides for light mode when using a dark base Prism theme */
@@ -1021,50 +1091,4 @@ body {
   color: #fff;
 }
 
-.auth-divider {
-  display: flex;
-  align-items: center;
-  text-align: center;
-  margin: 1.5rem 0;
-  color: var(--text-secondary);
-  font-size: 0.85rem;
-  font-weight: 500;
-}
 
-.auth-divider::before,
-.auth-divider::after {
-  content: '';
-  flex: 1;
-  border-bottom: 1px solid var(--border-color);
-}
-
-.auth-divider span {
-  padding: 0 0.75rem;
-}
-
-.auth-github-btn {
-  width: 100%;
-  padding: 0.75rem;
-  background-color: #24292f;
-  color: #fff;
-  border: 1px solid rgba(27, 31, 36, 0.15);
-  border-radius: 6px;
-  font-family: inherit;
-  font-weight: 600;
-  font-size: 0.95rem;
-  cursor: pointer;
-  transition: background-color 0.15s ease;
-  margin-bottom: 1.5rem;
-}
-
-.auth-github-btn:hover {
-  background-color: #030404;
-}
-
-.light-mode .auth-github-btn {
-  background-color: #24292f;
-}
-
-.light-mode .auth-github-btn:hover {
-  background-color: #1b1f24;
-}

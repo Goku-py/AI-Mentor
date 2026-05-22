@@ -9,11 +9,22 @@ Endpoints (all prefixed /api/v1/auth):
 """
 
 from __future__ import annotations
+
 import os
 import re
-import requests
+import secrets
+from urllib.parse import quote_plus, urlparse
 
-from flask import Blueprint, jsonify, make_response, request, redirect
+import requests
+from flask import (
+    Blueprint,
+    current_app,
+    jsonify,
+    make_response,
+    redirect,
+    request,
+    session,
+)
 from flask_jwt_extended import (
     create_access_token,
     create_refresh_token,
@@ -23,6 +34,7 @@ from flask_jwt_extended import (
     unset_jwt_cookies,
 )
 
+from app_pkg.extensions import csrf, limiter
 from models_pkg import User, db
 
 auth_bp = Blueprint("auth", __name__, url_prefix="/api/v1/auth")
@@ -31,7 +43,7 @@ _EMAIL_RE = re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")
 
 
 def _validate_email(email: str) -> str | None:
-    if not email or len(email) > 254:
+    if not email or len(email) > 254:  # noqa: PLR2004
         return "Email must be between 1 and 254 characters."
     if not _EMAIL_RE.match(email):
         return "Email address is not valid."
@@ -39,9 +51,9 @@ def _validate_email(email: str) -> str | None:
 
 
 def _validate_password(password: str) -> str | None:
-    if not password or len(password) < 8:
+    if not password or len(password) < 8:  # noqa: PLR2004
         return "Password must be at least 8 characters."
-    if len(password) > 128:
+    if len(password) > 128:  # noqa: PLR2004
         return "Password must be at most 128 characters."
     has_digit = any(c.isdigit() for c in password)
     has_special = any(not c.isalnum() for c in password)
@@ -52,14 +64,32 @@ def _validate_password(password: str) -> str | None:
 
 def _make_tokens(user: User) -> tuple[str, str]:
     additional_claims = {"role": user.role, "email": user.email}
-    access_token = create_access_token(
-        identity=str(user.id), additional_claims=additional_claims
-    )
+    access_token = create_access_token(identity=str(user.id), additional_claims=additional_claims)
     refresh_token = create_refresh_token(identity=str(user.id))
     return access_token, refresh_token
 
 
+def _coerce_jwt_identity(raw_identity: object) -> int | None:
+    try:
+        return int(raw_identity)
+    except (TypeError, ValueError):
+        return None
+
+
+def _allowed_frontend_origin() -> str:
+    raw_origins = os.environ.get("ALLOWED_ORIGINS", "").split(",")
+    for origin in raw_origins:
+        candidate = origin.strip()
+        if not candidate or candidate == "*":
+            continue
+        parsed = urlparse(candidate)
+        if parsed.scheme in {"http", "https"} and parsed.netloc:
+            return f"{parsed.scheme}://{parsed.netloc}"
+    return "http://localhost:5173"
+
+
 @auth_bp.route("/register", methods=["POST"])
+@limiter.limit("5 per minute; 20 per day")
 def register():
     data = request.get_json(silent=True) or {}
     email = str(data.get("email") or "").strip().lower()
@@ -74,9 +104,7 @@ def register():
         return jsonify({"ok": False, "error": pw_err}), 400
 
     if User.query.filter_by(email=email).first():
-        return jsonify(
-            {"ok": False, "error": "An account with that email already exists."}
-        ), 409
+        return jsonify({"ok": False, "error": "An account with that email already exists."}), 409
 
     user = User(email=email, role="student")
     user.set_password(password)
@@ -93,6 +121,7 @@ def register():
 
 
 @auth_bp.route("/login", methods=["POST"])
+@limiter.limit("10 per minute; 50 per day")
 def login():
     data = request.get_json(silent=True) or {}
     email = str(data.get("email") or "").strip().lower()
@@ -115,11 +144,10 @@ def login():
 
 
 @auth_bp.route("/logout", methods=["POST"])
+@csrf.exempt
 @jwt_required()
 def logout():
-    response = make_response(
-        jsonify({"ok": True, "message": "Logged out successfully."}), 200
-    )
+    response = make_response(jsonify({"ok": True, "message": "Logged out successfully."}), 200)
     unset_jwt_cookies(response)
     return response
 
@@ -127,7 +155,9 @@ def logout():
 @auth_bp.route("/me", methods=["GET"])
 @jwt_required()
 def me():
-    user_id = int(get_jwt_identity())
+    user_id = _coerce_jwt_identity(get_jwt_identity())
+    if user_id is None:
+        return jsonify({"ok": False, "error": "Invalid authentication token."}), 401
     user = db.session.get(User, user_id)
     if not user or not user.is_active:
         return jsonify({"ok": False, "error": "User not found or inactive."}), 404
@@ -135,114 +165,148 @@ def me():
 
 
 @auth_bp.route("/refresh", methods=["POST"])
+@csrf.exempt
 @jwt_required(refresh=True)
 def refresh():
-    user_id = get_jwt_identity()
-    user = db.session.get(User, int(user_id))
+    user_id = _coerce_jwt_identity(get_jwt_identity())
+    if user_id is None:
+        return jsonify({"ok": False, "error": "Invalid authentication token."}), 401
+    user = db.session.get(User, user_id)
     if not user or not user.is_active:
         return jsonify({"ok": False, "error": "User not found or inactive."}), 404
-    access_token, _ = _make_tokens(user)
-    return jsonify({"ok": True, "access_token": access_token}), 200
+    access_token, refresh_token = _make_tokens(user)
+    response = make_response(jsonify({"ok": True, "access_token": access_token}), 200)
+    set_refresh_cookies(response, refresh_token)
+    return response
 
 
 @auth_bp.route("/github/login", methods=["GET"])
+@limiter.limit("5 per minute")
 def github_login():
     client_id = os.environ.get("GITHUB_CLIENT_ID")
     if not client_id:
         return jsonify({"ok": False, "error": "GitHub OAuth not configured."}), 501
-    
+
+    state = secrets.token_urlsafe(32)
+    session["github_oauth_state"] = state
+
     redirect_uri = request.host_url.rstrip("/") + "/api/v1/auth/github/callback"
     github_auth_url = (
         f"https://github.com/login/oauth/authorize"
-        f"?client_id={client_id}"
-        f"&redirect_uri={redirect_uri}"
+        f"?client_id={quote_plus(client_id)}"
+        f"&redirect_uri={quote_plus(redirect_uri)}"
         f"&scope=user:email"
+        f"&state={quote_plus(state)}"
     )
     return redirect(github_auth_url)
 
 
-@auth_bp.route("/github/callback", methods=["GET"])
-def github_callback():
-    code = request.args.get("code")
-    if not code:
-        return jsonify({"ok": False, "error": "No code provided by GitHub."}), 400
-
-    client_id = os.environ.get("GITHUB_CLIENT_ID")
-    client_secret = os.environ.get("GITHUB_CLIENT_SECRET")
-    
-    # 1. Exchange code for access token
-    token_resp = requests.post(
+def _exchange_github_token(code: str) -> str | None:
+    resp = requests.post(
         "https://github.com/login/oauth/access_token",
         data={
-            "client_id": client_id,
-            "client_secret": client_secret,
+            "client_id": os.environ["GITHUB_CLIENT_ID"],
+            "client_secret": os.environ["GITHUB_CLIENT_SECRET"],
             "code": code,
         },
         headers={"Accept": "application/json"},
         timeout=10,
     )
-    if not token_resp.ok:
-        return jsonify({"ok": False, "error": "Failed to authenticate with GitHub."}), 401
-        
-    token_json = token_resp.json()
-    access_token = token_json.get("access_token")
-    if not access_token:
-        return jsonify({"ok": False, "error": "No access token from GitHub."}), 401
+    if not resp.ok:
+        return None
+    try:
+        data = resp.json()
+    except ValueError:
+        return None
+    return data.get("access_token")
 
-    # 2. Get user info
-    api_headers = {"Authorization": f"token {access_token}"}
-    user_resp = requests.get("https://api.github.com/user", headers=api_headers, timeout=10)
-    if not user_resp.ok:
-        return jsonify({"ok": False, "error": "Failed to fetch user profile."}), 401
-    
-    github_user = user_resp.json()
+
+def _fetch_github_user(access_token: str) -> dict | None:
+    headers = {"Authorization": f"token {access_token}"}
+    try:
+        resp = requests.get("https://api.github.com/user", headers=headers, timeout=10)
+    except requests.RequestException as exc:
+        current_app.logger.warning("GitHub user profile fetch failed: %s", exc)
+        return None
+    if not resp.ok:
+        return None
+    try:
+        return resp.json()
+    except ValueError:
+        return None
+
+
+def _fetch_primary_email(access_token: str, fallback_email: str | None) -> str | None:
+    headers = {"Authorization": f"token {access_token}"}
+    try:
+        resp = requests.get("https://api.github.com/user/emails", headers=headers, timeout=10)
+    except requests.RequestException:
+        return fallback_email
+    if not resp.ok:
+        return fallback_email
+    try:
+        entries = resp.json()
+    except ValueError:
+        return fallback_email
+    for entry in entries:
+        if entry.get("primary"):
+            return entry.get("email")
+    return fallback_email
+
+
+def _find_or_create_github_user(github_id: str, email: str) -> User:
+    user = User.query.filter_by(github_id=github_id).first()
+    if user:
+        return user
+    user = User.query.filter_by(email=email).first()
+    if user:
+        user.github_id = github_id
+        db.session.commit()
+        return user
+    user = User(email=email, github_id=github_id, role="student")
+    db.session.add(user)
+    db.session.commit()
+    return user
+
+
+@auth_bp.route("/github/callback", methods=["GET"])
+@limiter.limit("10 per minute")
+def github_callback():  # noqa: PLR0911
+    code = request.args.get("code")
+    state = request.args.get("state")
+    if not code:
+        return jsonify({"ok": False, "error": "No code provided by GitHub."}), 400
+
+    expected_state = session.pop("github_oauth_state", None)
+    if not expected_state or not secrets.compare_digest(state or "", expected_state):
+        return jsonify({"ok": False, "error": "Invalid OAuth state."}), 400
+
+    if not os.environ.get("GITHUB_CLIENT_ID") or not os.environ.get("GITHUB_CLIENT_SECRET"):
+        return jsonify({"ok": False, "error": "GitHub OAuth not configured."}), 501
+
+    try:
+        access_token = _exchange_github_token(code)
+    except requests.RequestException as exc:
+        current_app.logger.warning("GitHub token exchange failed: %s", exc)
+        return jsonify({"ok": False, "error": "GitHub service unavailable."}), 503
+    if not access_token:
+        return jsonify({"ok": False, "error": "GitHub authentication failed."}), 401
+
+    github_user = _fetch_github_user(access_token)
+    if not github_user:
+        return jsonify({"ok": False, "error": "GitHub service unavailable."}), 503
+
     github_id = str(github_user.get("id"))
-    
-    # 3. Get primary email
-    emails_resp = requests.get("https://api.github.com/user/emails", headers=api_headers, timeout=10)
-    primary_email = None
-    if emails_resp.ok:
-        for email_info in emails_resp.json():
-            if email_info.get("primary"):
-                primary_email = email_info.get("email")
-                break
-    
-    if not primary_email:
-        primary_email = github_user.get("email")
-        
+    primary_email = _fetch_primary_email(access_token, github_user.get("email"))
     if not primary_email:
         return jsonify({"ok": False, "error": "GitHub account must have an email."}), 400
 
-    primary_email = primary_email.strip().lower()
-
-    # 4. Find or create user
-    user = User.query.filter_by(github_id=github_id).first()
-    if not user:
-        # Check if email exists
-        user = User.query.filter_by(email=primary_email).first()
-        if user:
-            # Link github account
-            user.github_id = github_id
-            db.session.commit()
-        else:
-            # Create new user
-            user = User(email=primary_email, github_id=github_id, role="student")
-            db.session.add(user)
-            db.session.commit()
-            
+    user = _find_or_create_github_user(github_id, primary_email.strip().lower())
     if not user.is_active:
         return jsonify({"ok": False, "error": "Account is disabled."}), 403
 
-    # 5. Login
-    jwt_access, jwt_refresh = _make_tokens(user)
-    
-    # Redirect to frontend dashboard (assume root handles it)
-    frontend_url = os.environ.get("ALLOWED_ORIGINS", "").split(",")[0] or "/"
-    if frontend_url == "*":
-        frontend_url = "http://localhost:5173"
-        
+    _, jwt_refresh = _make_tokens(user)
+    frontend_url = _allowed_frontend_origin()
     response = make_response(redirect(frontend_url))
     set_refresh_cookies(response, jwt_refresh)
-    # Give the frontend a way to know the token immediately via query string
-    response.location = f"{frontend_url}?token={jwt_access}"
     return response

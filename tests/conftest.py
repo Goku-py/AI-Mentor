@@ -5,13 +5,14 @@ Uses the create_app() Application Factory with TestingConfig, so every test
 gets a clean in-memory database without touching the live database.
 """
 
+import contextlib
 import os
-import pytest
 from unittest.mock import patch
+
+import pytest
 
 from app_pkg import create_app
 from app_pkg.extensions import limiter
-
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -36,10 +37,8 @@ def client():
     app = create_app("testing")
     with app.app_context():
         # Reset rate-limit counters between tests (harmless if storage not configured)
-        try:
+        with contextlib.suppress(Exception):
             limiter.reset()
-        except Exception:
-            pass
         with app.test_client() as c:
             yield c
 
@@ -52,10 +51,10 @@ def auth_headers(client):
         def test_something(self, client, auth_headers):
             r = client.get('/api/v1/auth/me', headers=auth_headers)
     """
-    _EMAIL = "fixture@example.local"
-    _PASS = "Fixture1!"
+    _email = "fixture@example.local"
+    _password = "Fixture1!"
 
-    client.post("/api/v1/auth/register", json={"email": _EMAIL, "password": _PASS})
-    resp = client.post("/api/v1/auth/login", json={"email": _EMAIL, "password": _PASS})
+    client.post("/api/v1/auth/register", json={"email": _email, "password": _password})
+    resp = client.post("/api/v1/auth/login", json={"email": _email, "password": _password})
     token = resp.get_json()["access_token"]
     return {"Authorization": f"Bearer {token}"}

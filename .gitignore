@@ -76,3 +76,10 @@ js_out.txt
 ts_output.txt
 out.txt
 .ruff_cache/
+
+# Local tooling config (never commit personal settings)
+.claude/
+.trae/
+
+# Security audit reports (generated, not source)
+AUDIT_REPORT_*.md

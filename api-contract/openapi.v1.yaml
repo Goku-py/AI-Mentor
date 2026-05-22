@@ -1,7 +1,7 @@
 openapi: 3.0.3
 info:
   title: AI Mentor API
-  version: 1.0.0
+  version: 2.0.0
 servers:
   - url: /api/v1
 paths:
@@ -11,54 +11,12 @@ paths:
       responses:
         "200":
           description: Healthy response
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [status, available_tools, ai_mentor_enabled]
-                properties:
-                  status:
-                    type: string
-                  available_tools:
-                    type: object
-                    additionalProperties:
-                      type: boolean
-                  ai_mentor_enabled:
-                    type: boolean
   /tools:
     get:
       summary: Available language toolchains
       responses:
         "200":
           description: Tool availability
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [available, message]
-                properties:
-                  available:
-                    type: object
-                    additionalProperties:
-                      type: boolean
-                  message:
-                    type: string
-  /debug/gemini-status:
-    get:
-      summary: Gemini integration status
-      responses:
-        "200":
-          description: Diagnostic result
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [status, message]
-                properties:
-                  status:
-                    type: string
-                  message:
-                    type: string
   /analyze:
     post:
       summary: Analyze code and return issues and execution output
@@ -74,63 +32,138 @@ paths:
                   type: string
                 language:
                   type: string
+                  default: python
+                difficulty:
+                  type: string
+                  enum: [beginner, intermediate, advanced]
+                  default: beginner
       responses:
         "200":
           description: Successful analysis
-          content:
-            application/json:
-              schema:
-                type: object
-                required: [ok, language, summary, issues, execution, ai_mentor_feedback]
-                properties:
-                  ok:
-                    type: boolean
-                  language:
-                    type: string
-                  summary:
-                    type: object
-                    required: [line_count, issue_count]
-                    properties:
-                      line_count:
-                        type: integer
-                      issue_count:
-                        type: integer
-                  issues:
-                    type: array
-                    items:
-                      type: object
-                      required: [line, severity, code, message]
-                      properties:
-                        line:
-                          type: integer
-                        severity:
-                          type: string
-                        code:
-                          type: string
-                        message:
-                          type: string
-                  execution:
-                    type: object
-                    required: [stdout, stderr, returncode, timed_out, tool_missing]
-                    properties:
-                      stdout:
-                        type: string
-                      stderr:
-                        type: string
-                      returncode:
-                        type: integer
-                      timed_out:
-                        type: boolean
-                      tool_missing:
-                        type: boolean
-                      error:
-                        nullable: true
-                        oneOf:
-                          - type: "null"
-                          - type: object
-                  ai_mentor_feedback:
-                    type: string
         "400":
-          description: Invalid request
+          description: Invalid request (missing code, too large)
         "422":
           description: Required toolchain unavailable
+  /csrf-token:
+    get:
+      summary: Obtain a CSRF token for mutating requests
+      responses:
+        "200":
+          description: CSRF token returned
+  /auth/register:
+    post:
+      summary: Register a new user
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                password:
+                  type: string
+      responses:
+        "201":
+          description: User created
+        "400":
+          description: Validation error
+        "409":
+          description: Email already taken
+  /auth/login:
+    post:
+      summary: Log in with email and password
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              type: object
+              required: [email, password]
+              properties:
+                email:
+                  type: string
+                password:
+                  type: string
+      responses:
+        "200":
+          description: Login successful, tokens returned
+        "401":
+          description: Invalid credentials
+  /auth/github:
+    get:
+      summary: Initiate GitHub OAuth login
+      parameters:
+        - name: redirect
+          in: query
+          schema:
+            type: string
+      responses:
+        "302":
+          description: Redirect to GitHub authorization page
+  /auth/github/callback:
+    get:
+      summary: GitHub OAuth callback
+      parameters:
+        - name: code
+          in: query
+          schema:
+            type: string
+        - name: state
+          in: query
+          schema:
+            type: string
+      responses:
+        "302":
+          description: Redirect with session cookie set
+        "400":
+          description: OAuth error
+  /auth/me:
+    get:
+      summary: Get current authenticated user
+      responses:
+        "200":
+          description: User object
+        "401":
+          description: Not authenticated
+  /auth/logout:
+    post:
+      summary: Log out (clear refresh cookie)
+      responses:
+        "200":
+          description: Logged out
+  /history:
+    get:
+      summary: Get analyze history for current user
+      responses:
+        "200":
+          description: List of history entries
+        "401":
+          description: Not authenticated
+    delete:
+      summary: Clear analyze history for current user
+      responses:
+        "200":
+          description: History cleared
+        "401":
+          description: Not authenticated
+  /metrics:
+    get:
+      summary: Prometheus-format security metrics (API-key gated in production)
+      responses:
+        "200":
+          description: Metrics in Prometheus text format
+  /debug/sandbox-status:
+    get:
+      summary: Sandbox runtime diagnostics (disabled in production)
+      responses:
+        "200":
+          description: Sandbox diagnostic info
+  /debug/gemini-status:
+    get:
+      summary: Gemini integration diagnostics (disabled in production)
+      responses:
+        "200":
+          description: Diagnostic result

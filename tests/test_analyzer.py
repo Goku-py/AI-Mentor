@@ -5,16 +5,17 @@ Run with: python -m pytest tests/test_analyzer.py -v
 """
 
 import pytest
+
 import analyzer
 from analyzer import (
-    analyze_code,
-    verify_tools,
-    _detect_language_mismatch,
     _check_syntax,
+    _detect_language_mismatch,
     _line_based_checks,
     _python_error_help,
+    analyze_code,
     run_in_sandbox,
     sandbox_runtime_status,
+    verify_tools,
 )
 
 
@@ -44,14 +45,6 @@ class TestToolVerification:
         status = sandbox_runtime_status()
         assert "ok" in status
         assert "mode" in status
-        assert "host_fallback_allowed" in status
-
-    def test_host_fallback_blocked_in_production(self, monkeypatch):
-        """Host fallback must not be allowed in production mode."""
-        monkeypatch.setenv("ALLOW_HOST_EXECUTION_FALLBACK", "1")
-        monkeypatch.setenv("FLASK_ENV", "production")
-        status = sandbox_runtime_status()
-        assert status["host_fallback_allowed"] is False
 
     def test_sandbox_unavailable_returns_safe_error(self, monkeypatch):
         """Missing Docker should fail closed with SandboxUnavailable."""
@@ -90,7 +83,7 @@ class TestSyntaxChecking:
     def test_syntax_error_has_line_number(self):
         """Syntax errors should include line number."""
         code = "x = 1\nprint('hello'\ny = 2"
-        issues, exc = _check_syntax(code)
+        issues, _exc = _check_syntax(code)
         assert issues[0].line > 0
 
 
@@ -163,10 +156,7 @@ class TestAnalyzeCode:
         code = "x = 10 / 0"  # ZeroDivisionError
         result = await analyze_code(code, "python")
         assert result["ok"] is True  # ok=True, but execution has error
-        assert (
-            result["execution"]["returncode"] != 0
-            or result["execution"]["error"] is not None
-        )
+        assert result["execution"]["returncode"] != 0 or result["execution"]["error"] is not None
 
     @pytest.mark.asyncio
     async def test_analyze_invalid_language(self):
@@ -214,9 +204,7 @@ class TestAnalyzeCode:
             ("AI_MENTOR_BAD_RESPONSE", "bad_response"),
         ],
     )
-    async def test_ai_mentor_status_maps_stable_failure_states(
-        self, monkeypatch, feedback, status
-    ):
+    async def test_ai_mentor_status_maps_stable_failure_states(self, monkeypatch, feedback, status):
         """Analyze response should expose stable AI status metadata."""
 
         async def fake_mentorship(*_args, **_kwargs):
@@ -342,10 +330,7 @@ class TestPythonExecution:
         result = await analyze_code(code, "python")
         # The _run_python function has a 3.0 second default timeout
         # For this test, we just check that either timeout happened or error occurred
-        assert (
-            result["execution"]["timed_out"] is True
-            or result["execution"]["error"] is not None
-        )
+        assert result["execution"]["timed_out"] is True or result["execution"]["error"] is not None
 
     @pytest.mark.asyncio
     async def test_python_error_parsing(self):

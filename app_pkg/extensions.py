@@ -23,4 +23,4 @@ cors = CORS()
 talisman = Talisman()
 migrate = Migrate()
 
-__all__ = ["db", "jwt", "limiter", "csrf", "cors", "talisman", "migrate"]
+__all__ = ["cors", "csrf", "db", "jwt", "limiter", "migrate", "talisman"]

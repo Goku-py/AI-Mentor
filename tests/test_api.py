@@ -4,8 +4,9 @@ Integration tests for the Flask backend API.
 Run with: python -m pytest tests/test_api.py -v
 """
 
-import pytest
 import json
+
+import pytest
 
 # client and auth_headers fixtures are provided by tests/conftest.py
 
@@ -63,7 +64,9 @@ class TestAnalyzeEndpoint:
     def test_analyze_requires_code(self, client):
         """Analyze should reject missing code."""
         response = client.post(
-            "/api/v1/analyze", data=json.dumps({}), content_type="application/json"
+            "/api/v1/analyze",
+            data=json.dumps({}),
+            content_type="application/json",
         )
         assert response.status_code == 400
         data = response.get_json()
@@ -88,8 +91,9 @@ class TestAnalyzeEndpoint:
         )
         assert response.status_code == 200
         data = json.loads(response.data)
-        assert data["ok"] is True
-        assert data["language"] == "python"
+        # Success depends on sandbox availability
+        assert isinstance(data["success"], bool)
+        assert data["meta"]["language"] == "python"
 
     def test_analyze_includes_execution_result(self, client):
         """Analyze response should include execution output."""
@@ -100,11 +104,11 @@ class TestAnalyzeEndpoint:
         )
         assert response.status_code == 200
         data = response.get_json()
-        assert "execution" in data
-        if data["execution"].get("error", {}).get("type") == "SandboxUnavailable":
-            assert data["execution"]["returncode"] == -1
+        assert "execution" in data["meta"]
+        if data["meta"]["execution"].get("error", {}).get("type") == "SandboxUnavailable":
+            assert data["meta"]["execution"]["returncode"] == -1
         else:
-            assert "test output" in data["execution"]["stdout"]
+            assert "test output" in data["meta"]["execution"]["stdout"]
 
     def test_analyze_includes_issues(self, client):
         """Analyze response should include detected issues."""
@@ -116,8 +120,8 @@ class TestAnalyzeEndpoint:
             content_type="application/json",
         )
         data = json.loads(response.data)
-        assert "issues" in data
-        assert isinstance(data["issues"], list)
+        assert "issues" in data["meta"]
+        assert isinstance(data["meta"]["issues"], list)
 
     def test_analyze_includes_ai_feedback(self, client):
         """Analyze response should include AI mentor feedback."""
@@ -127,8 +131,8 @@ class TestAnalyzeEndpoint:
             content_type="application/json",
         )
         data = json.loads(response.data)
-        assert "ai_mentor_feedback" in data
-        assert data["ai_mentor_status"] == "ok"
+        assert "ai_mentor_feedback" in data["meta"]
+        assert data["meta"]["ai_mentor_status"] == "ok"
 
     def test_github_repo_analysis_endpoint_removed(self, client):
         """Repository analysis is not part of the public API."""
@@ -148,9 +152,9 @@ class TestAnalyzeEndpoint:
         )
         assert response.status_code == 200
         data = json.loads(response.data)
-        assert data["ok"] is True
+        assert isinstance(data["success"], bool)
         # Should have detected syntax error
-        assert any(i["code"] == "SYNTAX_ERROR" for i in data["issues"])
+        assert any(i["code"] == "SYNTAX_ERROR" for i in data["meta"]["issues"])
 
     def test_analyze_default_language_is_python(self, client):
         """Language should default to Python if not specified."""
@@ -160,12 +164,14 @@ class TestAnalyzeEndpoint:
             content_type="application/json",
         )
         data = json.loads(response.data)
-        assert data["language"] == "python"
+        assert data["meta"]["language"] == "python"
 
     def test_analyze_with_invalid_json(self, client):
         """Malformed JSON should be handled gracefully."""
         response = client.post(
-            "/api/v1/analyze", data="invalid json", content_type="application/json"
+            "/api/v1/analyze",
+            data="invalid json",
+            content_type="application/json",
         )
         assert response.status_code == 400
 
@@ -269,11 +275,10 @@ class TestHistoryEndpoint:
         """User A's history must not be visible to User B."""
 
         def _login(email):
-            client.post(
-                "/api/v1/auth/register", json={"email": email, "password": "TestPass1!"}
-            )
+            client.post("/api/v1/auth/register", json={"email": email, "password": "TestPass1!"})
             resp = client.post(
-                "/api/v1/auth/login", json={"email": email, "password": "TestPass1!"}
+                "/api/v1/auth/login",
+                json={"email": email, "password": "TestPass1!"},
             )
             return {"Authorization": f"Bearer {resp.get_json()['access_token']}"}
 

@@ -18,7 +18,7 @@ import logging
 import os
 import secrets
 import time
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 
 from flask import Flask, g, request
 
@@ -59,9 +59,7 @@ class _RequestContextFilter(logging.Filter):
 def _configure_json_logging(app: Flask) -> None:
     """Replace the default Flask/Werkzeug log handlers with a JSON formatter."""
     if not _HAS_JSON_LOGGER:
-        app.logger.warning(
-            "python-json-logger not installed — falling back to plain text logs"
-        )
+        app.logger.warning("python-json-logger not installed — falling back to plain text logs")
         return
 
     fmt = "%(asctime)s %(levelname)s %(name)s %(request_id)s %(message)s"
@@ -102,9 +100,7 @@ def _register_request_hooks(app: Flask) -> None:
 
     @app.after_request
     def _finish_request(response):
-        duration_ms = round(
-            (time.monotonic() - g.get("start_time", time.monotonic())) * 1000, 1
-        )
+        duration_ms = round((time.monotonic() - g.get("start_time", time.monotonic())) * 1000, 1)
         request_id = g.get("request_id", "-")
 
         # Inject request ID into response header so clients can reference it
@@ -124,9 +120,7 @@ def _register_request_hooks(app: Flask) -> None:
                 "status": response.status_code,
                 "duration_ms": duration_ms,
                 "ip": request.remote_addr,
-                "user_agent": request.user_agent.string[:120]
-                if request.user_agent.string
-                else "-",
+                "user_agent": request.user_agent.string[:120] if request.user_agent.string else "-",
             },
         )
         return response
@@ -137,7 +131,7 @@ def _register_request_hooks(app: Flask) -> None:
 # ---------------------------------------------------------------------------
 def init_observability(app: Flask) -> None:
     """Configure structured logging and request tracing on the Flask app."""
-    global APP_START_TIME
+    global APP_START_TIME  # noqa: PLW0603
     APP_START_TIME = time.monotonic()
     _configure_json_logging(app)
     _register_request_hooks(app)
@@ -146,6 +140,6 @@ def init_observability(app: Flask) -> None:
         extra={
             "version": APP_VERSION,
             "env": os.environ.get("FLASK_ENV", "development"),
-            "timestamp": datetime.now(timezone.utc).isoformat(),
+            "timestamp": datetime.now(UTC).isoformat(),
         },
     )

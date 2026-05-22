@@ -107,9 +107,9 @@ if ($LASTEXITCODE -ne 0) {
 
 Write-Host "`n[4/6] Installing Python dependencies..." -ForegroundColor Yellow
 
-if (Test-Path 'requirements.txt') {
-    Write-Host "  Installing from requirements.txt..." -ForegroundColor Gray
-    pip install -r requirements.txt --trusted-host pypi.org --trusted-host pypi.python.org
+if (Test-Path 'requirements.lock') {
+    Write-Host "  Installing from requirements.lock..." -ForegroundColor Gray
+    pip install -r requirements.lock
     if ($LASTEXITCODE -eq 0) {
         Write-Host "  ✓ Python dependencies installed" -ForegroundColor Green
     } else {
@@ -117,7 +117,7 @@ if (Test-Path 'requirements.txt') {
         exit 1
     }
 } else {
-    Write-Host "  ✗ requirements.txt not found!" -ForegroundColor Red
+    Write-Host "  ✗ requirements.lock not found!" -ForegroundColor Red
     exit 1
 }
 
@@ -129,12 +129,12 @@ Write-Host "`n[5/6] Installing Node.js dependencies..." -ForegroundColor Yellow
 
 if (Test-Path 'package.json') {
     Write-Host "  Installing from package.json..." -ForegroundColor Gray
-    npm install
+    npm ci
     if ($LASTEXITCODE -eq 0) {
         Write-Host "  ✓ Node dependencies installed" -ForegroundColor Green
     } else {
         Write-Host "  ✗ Failed to install Node dependencies" -ForegroundColor Red
-        Write-Host "  Try: npm cache clean --force && npm install" -ForegroundColor Gray
+        Write-Host "  Try: npm cache clean --force && npm ci" -ForegroundColor Gray
         exit 1
     }
 } else {

@@ -14,31 +14,28 @@ Usage:
 from __future__ import annotations
 
 import secrets
+from typing import TYPE_CHECKING
 
 import click
-from flask import Flask
 from sqlalchemy import inspect, text
 
+if TYPE_CHECKING:
+    from flask import Flask
 
-def register_cli(app: Flask) -> None:
+
+def register_cli(app: Flask) -> None:  # noqa: C901, PLR0915
     """Register all custom management commands on the Flask app."""
 
     @app.cli.command("db-seed")
-    @click.option(
-        "--email", default="admin@example.com", show_default=True, help="Admin email"
-    )
-    @click.option(
-        "--password", default=None, help="Admin password (auto-generated if omitted)"
-    )
+    @click.option("--email", default="admin@example.com", show_default=True, help="Admin email")
+    @click.option("--password", default=None, help="Admin password (auto-generated if omitted)")
     def db_seed(email: str, password: str | None) -> None:
         """Create the first admin user. Safe to run multiple times (idempotent)."""
-        from models_pkg import User, db
+        from models_pkg import User, db  # noqa: PLC0415
 
         existing = User.query.filter_by(email=email.strip().lower()).first()
         if existing:
-            click.echo(
-                f"[db-seed] Admin already exists: {existing.email} (role={existing.role})"
-            )
+            click.echo(f"[db-seed] Admin already exists: {existing.email} (role={existing.role})")
             return
 
         if not password:
@@ -55,7 +52,7 @@ def register_cli(app: Flask) -> None:
     @app.cli.command("db-stats")
     def db_stats() -> None:
         """Print row counts for every table in the database."""
-        from models_pkg import db
+        from models_pkg import db  # noqa: PLC0415
 
         inspector = inspect(db.engine)
         table_names = inspector.get_table_names()
@@ -71,7 +68,7 @@ def register_cli(app: Flask) -> None:
                 try:
                     row = conn.execute(text(f"SELECT COUNT(*) FROM {table}")).fetchone()  # noqa: S608
                     count = row[0] if row else "?"
-                except Exception:
+                except Exception:  # noqa: BLE001
                     count = "error"
                 click.echo(f"{table:<30} {count:>10}")
         click.echo("")
@@ -79,7 +76,7 @@ def register_cli(app: Flask) -> None:
     @app.cli.command("db-check")
     def db_check() -> None:
         """Verify database connectivity and print migration state."""
-        from models_pkg import db
+        from models_pkg import db  # noqa: PLC0415
 
         # 1. Connectivity
         try:
@@ -102,16 +99,10 @@ def register_cli(app: Flask) -> None:
         # 3. Migration state (alembic_version table)
         try:
             with db.engine.connect() as conn:
-                row = conn.execute(
-                    text("SELECT version_num FROM alembic_version")
-                ).fetchone()
+                row = conn.execute(text("SELECT version_num FROM alembic_version")).fetchone()
                 if row:
                     click.echo(f"[db-check] ✓ Migration version: {row[0]}")
                 else:
-                    click.echo(
-                        "[db-check] ✗ alembic_version is empty — run: flask db upgrade"
-                    )
-        except Exception:
-            click.echo(
-                "[db-check] ✗ alembic_version table missing — run: flask db upgrade"
-            )
+                    click.echo("[db-check] ✗ alembic_version is empty — run: flask db upgrade")
+        except Exception:  # noqa: BLE001
+            click.echo("[db-check] ✗ alembic_version table missing — run: flask db upgrade")

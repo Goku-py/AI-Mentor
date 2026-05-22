@@ -6,6 +6,7 @@ Endpoints:
 """
 
 from __future__ import annotations
+
 import json
 import os
 import urllib.error
@@ -22,7 +23,7 @@ debug_bp = Blueprint("debug", __name__, url_prefix="/api/v1")
 
 @debug_bp.route("/debug/gemini-status", methods=["GET"])
 @limiter.limit("3 per minute; 20 per day")
-def debug_gemini_status():
+def debug_gemini_status():  # noqa: C901, PLR0911, PLR0912
     api_key = (os.environ.get("GEMINI_API_KEY") or "").strip()
     if api_key.startswith('"') and api_key.endswith('"'):
         api_key = api_key[1:-1].strip()
@@ -45,17 +46,17 @@ def debug_gemini_status():
     payload = {"contents": [{"parts": [{"text": "Say 'test' only."}]}]}
 
     try:
-        req = urllib.request.Request(
+        req = urllib.request.Request(  # noqa: S310
             endpoint,
             data=json.dumps(payload).encode("utf-8"),
             headers={"Content-Type": "application/json"},
             method="POST",
         )
-        with urllib.request.urlopen(req, timeout=10) as resp:  # nosec B310
+        with urllib.request.urlopen(req, timeout=10) as resp:  # nosec B310  # noqa: S310
             status_code = resp.getcode()
             raw_body = resp.read().decode("utf-8", errors="replace")
 
-        if status_code == 200:
+        if status_code == 200:  # noqa: PLR2004
             try:
                 parsed = json.loads(raw_body)
                 if parsed.get("candidates"):
@@ -95,12 +96,11 @@ def debug_gemini_status():
             error_body = (http_err.read() or b"").decode("utf-8", errors="replace")
             error_json = json.loads(error_body) if error_body else {}
             error_message = error_json.get("error", {}).get("message", "")
-        except Exception:
+        except Exception:  # noqa: BLE001
             error_message = ""
         haystack = (
-            f"{error_message} {error_body}".lower() if "error_body" in dir() else ""
         )
-        if status_code == 403:
+        if status_code == 403:  # noqa: PLR2004
             if "api has not been used" in haystack or "disabled" in haystack:
                 return jsonify(
                     {
@@ -116,7 +116,7 @@ def debug_gemini_status():
                     "resolution": "Check API key permissions.",
                 }
             ), 200
-        if status_code == 400:
+        if status_code == 400:  # noqa: PLR2004
             return jsonify(
                 {
                     "status": "invalid_key",
@@ -124,7 +124,7 @@ def debug_gemini_status():
                     "resolution": "Generate a new API key at https://aistudio.google.com/app/apikey",
                 }
             ), 200
-        if status_code == 429:
+        if status_code == 429:  # noqa: PLR2004
             return jsonify(
                 {
                     "status": "quota_exceeded",
@@ -144,15 +144,15 @@ def debug_gemini_status():
         return jsonify(
             {
                 "status": "network_error",
-                "message": f"Network error: {str(url_err)}",
+                "message": f"Network error: {url_err!s}",
                 "resolution": "Check internet connectivity.",
             }
         ), 200
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         return jsonify(
             {
                 "status": "internal_error",
-                "message": f"Internal check failed: {str(exc)}",
+                "message": f"Internal check failed: {exc!s}",
                 "resolution": "Check server logs.",
             }
         ), 200

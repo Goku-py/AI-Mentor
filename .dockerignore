@@ -14,5 +14,6 @@ tests
 .vscode
 .idea
 dist
+.husky
 instance/
 *.db

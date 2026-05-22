@@ -11,6 +11,10 @@ Covers all 5 endpoints:
 The 'client' fixture is provided by tests/conftest.py (DB in-memory, CSRF off).
 """
 
+from unittest.mock import Mock, patch
+
+import requests
+
 VALID_EMAIL = "auth_test@example.local"
 VALID_PASS = "ValidPass1!"
 WEAK_PASS = "short"  # < 8 chars
@@ -26,7 +30,8 @@ class TestRegister:
     def test_register_valid_credentials_returns_201(self, client):
         """Valid email + strong password → 201 with user info and access token."""
         r = client.post(
-            "/api/v1/auth/register", json={"email": VALID_EMAIL, "password": VALID_PASS}
+            "/api/v1/auth/register",
+            json={"email": VALID_EMAIL, "password": VALID_PASS},
         )
         assert r.status_code == 201
         data = r.get_json()
@@ -37,26 +42,24 @@ class TestRegister:
     def test_register_default_role_is_student(self, client):
         """Newly registered users always get the 'student' role."""
         r = client.post(
-            "/api/v1/auth/register", json={"email": VALID_EMAIL, "password": VALID_PASS}
+            "/api/v1/auth/register",
+            json={"email": VALID_EMAIL, "password": VALID_PASS},
         )
         assert r.get_json()["user"]["role"] == "student"
 
     def test_register_duplicate_email_returns_409(self, client):
         """Registering the same email twice returns 409 Conflict."""
-        client.post(
-            "/api/v1/auth/register", json={"email": VALID_EMAIL, "password": VALID_PASS}
-        )
+        client.post("/api/v1/auth/register", json={"email": VALID_EMAIL, "password": VALID_PASS})
         r = client.post(
-            "/api/v1/auth/register", json={"email": VALID_EMAIL, "password": VALID_PASS}
+            "/api/v1/auth/register",
+            json={"email": VALID_EMAIL, "password": VALID_PASS},
         )
         assert r.status_code == 409
         assert r.get_json()["ok"] is False
 
     def test_register_short_password_returns_400(self, client):
         """Password shorter than 8 characters is rejected."""
-        r = client.post(
-            "/api/v1/auth/register", json={"email": VALID_EMAIL, "password": WEAK_PASS}
-        )
+        r = client.post("/api/v1/auth/register", json={"email": VALID_EMAIL, "password": WEAK_PASS})
         assert r.status_code == 400
         assert "password" in r.get_json()["error"].lower()
 
@@ -94,7 +97,8 @@ class TestRegister:
     def test_register_returns_refresh_cookie(self, client):
         """Registration must set a refresh token cookie (httpOnly)."""
         r = client.post(
-            "/api/v1/auth/register", json={"email": VALID_EMAIL, "password": VALID_PASS}
+            "/api/v1/auth/register",
+            json={"email": VALID_EMAIL, "password": VALID_PASS},
         )
         assert r.status_code == 201
         assert "refresh_token_cookie" in r.headers.get("Set-Cookie", "")
@@ -107,16 +111,12 @@ class TestLogin:
     """POST /api/v1/auth/login"""
 
     def _register(self, client):
-        client.post(
-            "/api/v1/auth/register", json={"email": VALID_EMAIL, "password": VALID_PASS}
-        )
+        client.post("/api/v1/auth/register", json={"email": VALID_EMAIL, "password": VALID_PASS})
 
     def test_login_correct_password_returns_200(self, client):
         """Correct credentials return 200 with access token."""
         self._register(client)
-        r = client.post(
-            "/api/v1/auth/login", json={"email": VALID_EMAIL, "password": VALID_PASS}
-        )
+        r = client.post("/api/v1/auth/login", json={"email": VALID_EMAIL, "password": VALID_PASS})
         assert r.status_code == 200
         data = r.get_json()
         assert data["ok"] is True
@@ -149,9 +149,7 @@ class TestLogin:
     def test_login_sets_refresh_cookie(self, client):
         """Login must set a refresh token cookie."""
         self._register(client)
-        r = client.post(
-            "/api/v1/auth/login", json={"email": VALID_EMAIL, "password": VALID_PASS}
-        )
+        r = client.post("/api/v1/auth/login", json={"email": VALID_EMAIL, "password": VALID_PASS})
         assert "refresh_token_cookie" in r.headers.get("Set-Cookie", "")
 
 
@@ -180,9 +178,7 @@ class TestMe:
 
     def test_me_with_garbage_token_returns_4xx(self, client):
         """A syntactically invalid token (not JWT) should be rejected."""
-        r = client.get(
-            "/api/v1/auth/me", headers={"Authorization": "Bearer this.is.garbage"}
-        )
+        r = client.get("/api/v1/auth/me", headers={"Authorization": "Bearer this.is.garbage"})
         assert r.status_code in (401, 422)
 
 
@@ -202,3 +198,82 @@ class TestLogout:
         """Logout without any token returns 401."""
         r = client.post("/api/v1/auth/logout")
         assert r.status_code == 401
+
+
+class TestGithubOAuth:
+    """GET /api/v1/auth/github/login and /api/v1/auth/github/callback"""
+
+    def test_github_login_includes_state_and_redirect_uri(self, client, monkeypatch):
+        monkeypatch.setenv("GITHUB_CLIENT_ID", "client-123")
+
+        r = client.get("/api/v1/auth/github/login")
+        assert r.status_code == 302
+        location = r.headers.get("Location", "")
+        assert "github.com/login/oauth/authorize" in location
+        assert "state=" in location
+        assert "redirect_uri=" in location
+
+        with client.session_transaction() as sess:
+            assert sess.get("github_oauth_state")
+
+    def test_github_callback_rejects_invalid_state(self, client, monkeypatch):
+        monkeypatch.setenv("GITHUB_CLIENT_ID", "client-123")
+        monkeypatch.setenv("GITHUB_CLIENT_SECRET", "secret-123")
+
+        with client.session_transaction() as sess:
+            sess["github_oauth_state"] = "expected-state"
+
+        r = client.get("/api/v1/auth/github/callback?code=abc&state=wrong-state")
+        assert r.status_code == 400
+        data = r.get_json()
+        assert data["ok"] is False
+        assert "state" in data["error"].lower()
+
+    def test_github_callback_service_failure_returns_503(self, client, monkeypatch):
+        monkeypatch.setenv("GITHUB_CLIENT_ID", "client-123")
+        monkeypatch.setenv("GITHUB_CLIENT_SECRET", "secret-123")
+
+        with client.session_transaction() as sess:
+            sess["github_oauth_state"] = "expected-state"
+
+        with patch(
+            "app_pkg.blueprints.auth.routes.requests.post",
+            side_effect=requests.RequestException("network down"),
+        ):
+            r = client.get("/api/v1/auth/github/callback?code=abc&state=expected-state")
+            assert r.status_code == 503
+
+    def test_github_callback_sets_refresh_cookie_and_no_token_query(self, client, monkeypatch):
+        monkeypatch.setenv("GITHUB_CLIENT_ID", "client-123")
+        monkeypatch.setenv("GITHUB_CLIENT_SECRET", "secret-123")
+        monkeypatch.setenv("ALLOWED_ORIGINS", "http://localhost:5173")
+
+        with client.session_transaction() as sess:
+            sess["github_oauth_state"] = "expected-state"
+
+        token_resp = Mock()
+        token_resp.ok = True
+        token_resp.json.return_value = {"access_token": "gh-access"}
+
+        user_resp = Mock()
+        user_resp.ok = True
+        user_resp.json.return_value = {"id": 98765, "email": "oauth@example.local"}
+
+        emails_resp = Mock()
+        emails_resp.ok = True
+        emails_resp.json.return_value = [{"email": "oauth@example.local", "primary": True}]
+
+        with (
+            patch("app_pkg.blueprints.auth.routes.requests.post", return_value=token_resp),
+            patch(
+                "app_pkg.blueprints.auth.routes.requests.get",
+                side_effect=[user_resp, emails_resp],
+            ),
+        ):
+            r = client.get("/api/v1/auth/github/callback?code=abc&state=expected-state")
+
+        assert r.status_code == 302
+        location = r.headers.get("Location", "")
+        assert location == "http://localhost:5173"
+        assert "token=" not in location
+        assert "refresh_token_cookie" in r.headers.get("Set-Cookie", "")

@@ -10,17 +10,20 @@ Usage in create_app():
 import os
 import secrets
 from datetime import timedelta
+from typing import ClassVar
+
 from sqlalchemy.pool import NullPool, StaticPool
 
 
-def _bool_env(key: str, default: bool = False) -> bool:
+def _bool_env(key: str, *, default: bool = False) -> bool:
     return os.environ.get(key, str(default)).strip().lower() in ("1", "true", "yes")
 
 
 def _is_prod() -> bool:
-    return (
-        os.environ.get("FLASK_ENV") or os.environ.get("APP_ENV") or ""
-    ).strip().lower() in {"prod", "production"}
+    return (os.environ.get("FLASK_ENV") or os.environ.get("APP_ENV") or "").strip().lower() in {
+        "prod",
+        "production",
+    }
 
 
 def _db_engine_options(db_url: str) -> dict:
@@ -40,25 +43,21 @@ def _db_engine_options(db_url: str) -> dict:
 
 class BaseConfig:
     # Secret key
-    SECRET_KEY: str = (os.environ.get("SECRET_KEY") or "").strip() or secrets.token_hex(
-        32
-    )
+    SECRET_KEY: str = (os.environ.get("SECRET_KEY") or "").strip() or secrets.token_hex(32)
 
     # CSRF
     WTF_CSRF_SECRET_KEY: str = (
         os.environ.get("WTF_CSRF_SECRET_KEY") or ""
     ).strip() or secrets.token_hex(32)
     WTF_CSRF_TIME_LIMIT: int = 3600
-    WTF_CSRF_HEADERS: list = ["X-CSRFToken"]
+    WTF_CSRF_HEADERS: ClassVar[list] = ["X-CSRFToken"]
 
     # JWT
-    JWT_SECRET_KEY: str = (
-        os.environ.get("JWT_SECRET_KEY") or ""
-    ).strip() or secrets.token_hex(32)
+    JWT_SECRET_KEY: str = (os.environ.get("JWT_SECRET_KEY") or "").strip() or secrets.token_hex(32)
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(minutes=15)
     JWT_REFRESH_TOKEN_EXPIRES = timedelta(days=30)
-    JWT_TOKEN_LOCATION: list = ["headers", "cookies"]
-    JWT_COOKIE_CSRF_PROTECT: bool = False  # handled by Flask-WTF
+    JWT_TOKEN_LOCATION: ClassVar[list] = ["headers", "cookies"]
+    JWT_COOKIE_CSRF_PROTECT: bool = True
     JWT_COOKIE_SAMESITE: str = "Lax"
 
     # Database
@@ -75,7 +74,7 @@ class BaseConfig:
 
 
 # Set pool options AFTER class definition so _db_engine_options() can be called cleanly
-BaseConfig.SQLALCHEMY_ENGINE_OPTIONS = _db_engine_options(BaseConfig._raw_db_url)
+BaseConfig.SQLALCHEMY_ENGINE_OPTIONS = _db_engine_options(BaseConfig._raw_db_url)  # noqa: SLF001
 
 
 class DevelopmentConfig(BaseConfig):
@@ -88,6 +87,7 @@ class DevelopmentConfig(BaseConfig):
 
 class ProductionConfig(BaseConfig):
     DEBUG: bool = False
+    MAX_CONTENT_LENGTH: int = 512 * 1024
     JWT_COOKIE_SECURE: bool = True
     SESSION_COOKIE_SECURE: bool = True
     SESSION_COOKIE_HTTPONLY: bool = True
@@ -99,13 +99,17 @@ class ProductionConfig(BaseConfig):
         # Otherwise, the BaseConfig fallback (secrets.token_hex) will silently
         # regenerate keys on every restart, logging all users out instantly.
         if not os.environ.get("SECRET_KEY"):
-            raise RuntimeError(
-                "CRITICAL ERROR: SECRET_KEY environment variable MUST be set in Production!"
-            )
+            msg = "CRITICAL ERROR: SECRET_KEY environment variable MUST be set in Production!"
+            raise RuntimeError(msg)
         if not os.environ.get("JWT_SECRET_KEY"):
-            raise RuntimeError(
-                "CRITICAL ERROR: JWT_SECRET_KEY environment variable MUST be set in Production!"
-            )
+            msg = "CRITICAL ERROR: JWT_SECRET_KEY environment variable MUST be set in Production!"
+            raise RuntimeError(msg)
+        allowed_origins = (os.environ.get("ALLOWED_ORIGINS") or "").strip()
+        if allowed_origins == "*" or any(
+            origin.strip() == "*" for origin in allowed_origins.split(",")
+        ):
+            msg = "CRITICAL ERROR: ALLOWED_ORIGINS must not be '*' in Production. Set an explicit allowlist."  # noqa: E501
+            raise RuntimeError(msg)
 
 
 class TestingConfig(BaseConfig):
@@ -116,7 +120,7 @@ class TestingConfig(BaseConfig):
 
     # In-memory SQLite: StaticPool keeps all connections on the same DB
     SQLALCHEMY_DATABASE_URI: str = "sqlite:///:memory:"
-    SQLALCHEMY_ENGINE_OPTIONS: dict = {
+    SQLALCHEMY_ENGINE_OPTIONS: ClassVar[dict] = {
         "connect_args": {"check_same_thread": False},
         "poolclass": StaticPool,
     }

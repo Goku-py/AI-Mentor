@@ -11,7 +11,6 @@ import unicodedata
 
 from flask import jsonify, request
 
-
 # ---------------------------------------------------------------------------
 # Bot / scraper UA blocking
 # ---------------------------------------------------------------------------
@@ -87,7 +86,7 @@ def init_security(app) -> None:
     @app.before_request
     def block_automated_clients():
         if request.path not in _PROTECTED_PATHS:
-            return
+            return None
         ua = request.headers.get("User-Agent", "").strip()
         if not ua or _BOT_UA_RE.search(ua):
             SECURITY_METRICS["blocked_automated_clients"] += 1
@@ -101,8 +100,9 @@ def init_security(app) -> None:
                 {
                     "ok": False,
                     "error": "Automated requests are not permitted on this endpoint.",
-                }
+                },
             ), 403
+        return None
 
     @app.errorhandler(429)
     def ratelimit_exceeded(e):
@@ -121,7 +121,7 @@ def init_security(app) -> None:
                 "ok": False,
                 "error": "Too many requests. Please wait before retrying.",
                 "retry_after_seconds": retry_seconds,
-            }
+            },
         )
         response.status_code = 429
         if retry_seconds is not None:

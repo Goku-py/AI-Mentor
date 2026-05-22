@@ -1,0 +1,32 @@
+[project]
+name = "ai-code-mentor"
+version = "0.1.0"
+description = "AI-powered code mentor and compiler"
+requires-python = ">=3.11"
+
+[tool.ruff]
+target-version = "py311"
+line-length = 100
+
+[tool.ruff.lint]
+select = ["ALL"]
+ignore = [
+    "D",       # docstrings
+    "ANN",     # type annotations
+    "S101",    # assert usage
+    "COM812",  # trailing comma — handled by formatter
+    "EM101",   # string literal in exception
+    "EM102",   # f-string in exception
+    "G004",    # f-string in log
+    "T201",    # print statements (intentional in cli)
+]
+
+[tool.ruff.lint.per-file-ignores]
+"tests/*" = ["S", "PLR", "ARG"]
+"migrations/*" = ["ALL"]
+"cli.py" = ["T201"]
+# "analyzer.py" = ["T201"]
+
+[tool.ruff.format]
+quote-style = "double"
+indent-style = "space"

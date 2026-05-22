@@ -12,14 +12,14 @@ export default defineConfig({
       command: "python app.py",
       port: 5000,
       timeout: 120_000,
-      reuseExistingServer: true,
+      reuseExistingServer: !process.env.CI,
       env: { FLASK_ENV: "development", PORT: "5000" },
     },
     {
       command: "npm run dev -- --host 127.0.0.1 --port 5173",
       port: 5173,
       timeout: 120_000,
-      reuseExistingServer: true,
+      reuseExistingServer: !process.env.CI,
     },
   ],
   projects: [

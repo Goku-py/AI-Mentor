@@ -127,12 +127,12 @@ echo -e "\033[33m[5/6] Installing Node.js dependencies...\033[0m"
 
 if [ -f 'package.json' ]; then
     echo -e "  \033[90mInstalling from package.json...\033[0m"
-    npm install
+    npm ci
     if [ $? -eq 0 ]; then
         echo -e "  \033[32m✓\033[0m Node dependencies installed"
     else
         echo -e "  \033[31m✗\033[0m Failed to install Node dependencies"
-        echo -e "  \033[90mTry: npm cache clean --force && npm install\033[0m"
+        echo -e "  \033[90mTry: npm cache clean --force && npm ci\033[0m"
         exit 1
     fi
 else

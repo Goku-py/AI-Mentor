@@ -1,6 +1,7 @@
 """app_pkg/blueprints/static_files/routes.py — Frontend SPA serving + legacy redirects."""
 
-from flask import Blueprint, redirect, send_from_directory, current_app
+from flask import Blueprint, current_app, redirect, send_from_directory
+
 from app_pkg.extensions import csrf
 
 static_bp = Blueprint("static_files", __name__)
