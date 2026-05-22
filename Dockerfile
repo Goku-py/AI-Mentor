@@ -5,7 +5,7 @@ WORKDIR /frontend
 COPY package.json package-lock.json ./
 RUN npm ci
 
-COPY index.html vite.config.js tsconfig.json ./
+COPY index.html vite.config.ts tsconfig.json public/ ./
 COPY src/ src/
 RUN npx vite build
 
