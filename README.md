@@ -36,6 +36,8 @@ It's like having a tutor sitting next to you who refuses to do your homework for
 | 💡 **Catches hidden mistakes** | Even if your code *runs* but gives the wrong answer, the AI notices |
 | 🌙 **Light & dark mode** | Switch themes with one click |
 | 🎨 **Color-coded editor** | Code automatically gets colored by language so it's easier to read |
+| 🔐 **User accounts** | Sign in with email + password to save your progress |
+| 🛡️ **Safe execution** | Code runs in isolated Docker containers with automatic host fallback |
 
 ---
 
@@ -52,8 +54,8 @@ Then open a terminal and run these commands:
 
 **Step 1 — Download the project**
 ```bash
-git clone https://github.com/Goku-py/ai-code-mentor.git
-cd ai-code-mentor
+git clone https://github.com/Goku-py/AI-Mentor.git
+cd AI-Mentor
 ```
 
 **Step 2 — Add your AI key**
@@ -62,18 +64,17 @@ copy .env.example .env
 ```
 Open the `.env` file that was just created, find the line that says `GEMINI_API_KEY=`, and paste your key after the `=`.
 
-**Step 3 — Start the AI server** *(keep this window open)*
+**Step 3 — Install dependencies**
 ```bash
-python -m venv venv
-.\venv\Scripts\Activate.ps1
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
 pip install -r requirements.txt
-python app.py
+npm install
 ```
 
-**Step 4 — Start the website** *(open a second terminal window)*
+**Step 4 — Start everything with one command**
 ```bash
-npm install
-npm run dev
+npm run dev:full
 ```
 
 **Step 5 — Open it in your browser**
@@ -96,21 +97,21 @@ Select a language, type some code, and click **Run**. That's it!
 
 | What you see | What to try |
 |---|---|
-| "Connection refused" or blank page | Make sure the AI server is still running (`python app.py` in the first terminal) |
+| "Connection refused" or blank page | Make sure `npm run dev:full` is still running in your terminal |
 | `pip install` gives an error | Run `python -m pip install --upgrade pip` first, then try again |
 | `npm install` gives an error | Delete the `node_modules` folder, run `npm cache clean --force`, then `npm install` again |
 | Java or C/C++ says "compiler not found" | You need to install the Java or C compiler separately and add it to your system PATH |
 | No AI hint appears after running code | Double-check your `.env` file has the correct API key with no extra spaces |
 
-Still stuck? [Open an issue on GitHub](https://github.com/Goku-py/ai-code-mentor/issues) and describe what happened.
+Still stuck? [Open an issue on GitHub](https://github.com/Goku-py/AI-Mentor/issues) and describe what happened.
 
 ---
 
 ## 🔮 What's coming next?
 
 - **Smarter AI hints** — training the AI specifically on common student mistakes for even better feedback
-- **Teacher dashboard** — so professors can see which topics their students struggle with most
-- **Safer code execution** — running student code in an isolated container so nothing can go wrong on the server
+- **Teacher analytics** — so professors can see which topics their students struggle with most
+- **Deeper AI training** — fine-tuning the model to recognize more logic errors and edge cases
 
 ---
 
@@ -120,25 +121,40 @@ Still stuck? [Open an issue on GitHub](https://github.com/Goku-py/ai-code-mentor
 <summary>Click to expand — project structure & how it's built</summary>
 
 The app has two parts that run at the same time:
-- **AI server** (`app.py`, `analyzer.py`) — handles running code and calling Google's AI
-- **Website** (`src/`) — the editor and output panel you see in the browser
+- **Backend** (`app.py`, `app_pkg/`, `analyzer.py`) — runs code, handles auth, calls Google's AI
+- **Frontend** (`src/`) — the editor, output panel, and auth modal you see in the browser
 
 ```
-ai-code-mentor/
-├── app.py            # AI server
-├── analyzer.py       # Runs the code & talks to Google AI
-├── src/
-│   ├── App.jsx       # The main editor + output screen
-│   └── index.css     # All the styling (light/dark mode, layout)
-└── tests/            # Automated tests
+AI-Mentor/
+├── app.py                # Entry point
+├── analyzer.py           # Code execution & AI analysis
+├── app_pkg/              # Flask application package
+│   ├── blueprints/       # Route handlers (api, auth, debug)
+│   ├── config.py         # App configuration
+│   ├── extensions.py     # Flask extensions (SQLAlchemy, etc.)
+│   └── observability.py  # Logging & metrics
+├── models_pkg/           # Database models (user, audit log)
+├── src/                  # React frontend (TypeScript)
+│   ├── App.tsx           # Main app layout
+│   ├── components/       # UI components (Auth, Editor, Output, Toolbar)
+│   ├── hooks/            # React hooks (useAuth, useCode, useSettings)
+│   ├── services/         # API client
+│   └── types/            # TypeScript type definitions
+├── public/               # Static assets (favicon)
+├── tests/                # Automated tests (pytest)
+├── pyproject.toml        # Python tool config (ruff)
+├── vite.config.ts        # Vite bundler config
+└── tsconfig.json         # TypeScript config
 ```
 
 | Part | Built with |
 |---|---|
-| Website | React + Vite |
+| Website | React + TypeScript + Vite |
 | AI server | Python + Flask |
 | AI hints | Google Gemini (via API) |
-| Tests | pytest |
+| Database | SQLite / PostgreSQL |
+| Execution | Docker (with host fallback) |
+| Tests | pytest (Python) + Playwright (E2E) |
 
 </details>
 
