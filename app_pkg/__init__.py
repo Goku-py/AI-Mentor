@@ -143,6 +143,14 @@ def create_app(config=None) -> Flask:
     app.register_blueprint(debug_bp)
     app.register_blueprint(static_bp)
 
+    # In development, exempt auth POST routes from CSRF for easier API testing
+    if app.config.get("ENV") == "development":
+        for rule in app.url_map.iter_rules():
+            if rule.endpoint and rule.endpoint.startswith("auth."):
+                view_func = app.view_functions.get(rule.endpoint)
+                if view_func:
+                    csrf.exempt(view_func)
+
     # --- CLI management commands ---
     register_cli(app)
 

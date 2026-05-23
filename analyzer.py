@@ -161,7 +161,10 @@ def _sandbox_unavailable_execution(message: str, explanation: str) -> dict[str, 
     return execution
 
 
-_HOST_EXECUTION_ENABLED: bool = os.environ.get("HOST_EXECUTION_ENABLED", "").strip() == "1"
+_HOST_EXECUTION_ENABLED: bool = (
+    os.environ.get("HOST_EXECUTION_ENABLED", "").strip() == "1"
+    or os.environ.get("FLASK_ENV", "development") == "development"
+)
 
 
 def _run_host_sandboxed(

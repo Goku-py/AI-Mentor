@@ -51,6 +51,7 @@ try {
 
 try {
     $login = Invoke-RestMethod -Method Post -Uri "$Base/auth/login" -ContentType "application/json" `
+        -WebSession $session -Headers $csrfHeaders `
         -Body (@{ email = $Email; password = $Pass } | ConvertTo-Json)
     Record "TC106" "Login returns token" ($null -ne $login.access_token) "ok=$($login.ok)"
 } catch { Record "TC106" "Login returns token" $false $_.Exception.Message }

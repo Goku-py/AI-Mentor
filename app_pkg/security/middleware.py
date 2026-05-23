@@ -6,7 +6,9 @@ Registered into the app by create_app() via init_security(app).
 
 from __future__ import annotations
 
+import os
 import re
+import secrets
 import unicodedata
 
 from flask import jsonify, request
@@ -78,6 +80,18 @@ def contains_abuse_pattern(code: str) -> str | None:
 
 
 # ---------------------------------------------------------------------------
+# Helpers
+# ---------------------------------------------------------------------------
+def _has_valid_api_key() -> bool:
+    """Check if request carries a valid ANALYZE_API_KEY via X-API-Key header."""
+    required_key = (os.environ.get("ANALYZE_API_KEY") or "").strip()
+    if not required_key:
+        return False
+    provided_key = (request.headers.get("X-API-Key") or "").strip()
+    return secrets.compare_digest(required_key, provided_key)
+
+
+# ---------------------------------------------------------------------------
 # App registration
 # ---------------------------------------------------------------------------
 def init_security(app) -> None:
@@ -87,6 +101,10 @@ def init_security(app) -> None:
     def block_automated_clients():
         if request.path not in _PROTECTED_PATHS:
             return None
+
+        if _has_valid_api_key():
+            return None
+
         ua = request.headers.get("User-Agent", "").strip()
         if not ua or _BOT_UA_RE.search(ua):
             SECURITY_METRICS["blocked_automated_clients"] += 1
