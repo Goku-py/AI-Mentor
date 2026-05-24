@@ -3,4 +3,8 @@ builder = "NIXPACKS"
 buildCommand = "npm ci && npm run build"
 
 [deploy]
-startCommand = "sh -c 'gunicorn --bind 0.0.0.0:$PORT app:app'"
+startCommand = "sh -c 'gunicorn --bind 0.0.0.0:$PORT -w 4 --timeout 30 app:app'"
+
+# PostgreSQL service (provision via Railway dashboard → "New" → "Database" → "PostgreSQL")
+# The DATABASE_URL env var will be auto-injected into the app service.
+# After provisioning, run: railway run flask db upgrade

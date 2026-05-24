@@ -1,2 +1,14 @@
+# Block committing .env file with real secrets
+if git rev-parse --git-dir > /dev/null 2>&1; then
+  STAGED_ENV=$(git diff --cached --name-only | grep -c "^\.env$" || true)
+  if [ "$STAGED_ENV" -gt 0 ]; then
+    echo "ERROR: You are trying to commit .env — this file MUST NOT be committed."
+    echo "It contains secrets. Remove it from the staging area:"
+    echo "  git reset HEAD .env"
+    echo "If you need to track env variable changes, edit .env.example instead."
+    exit 1
+  fi
+fi
+
 npx lint-staged
 npx tsc --noEmit
