@@ -204,14 +204,21 @@ class ProductionConfig(BaseConfig):
                 msg = (
                     f"CRITICAL ERROR: {name} has unresolved Railway ref ({uri}). "
                     "Provision Redis (New → Database → Redis) or "
-                    f"set {name}=memory:// for in-memory storage."
+                    f"delete {name} from env vars (app auto-detects REDIS_URL)."
                 )
                 raise RuntimeError(msg)
             if uri.startswith("/"):
                 msg = (
                     f"CRITICAL ERROR: {name} starts with '/' ({uri}). "
                     "Unresolved Railway ${{Redis.REDIS_URL}} — Redis plugin not linked. "
-                    "Provision Redis or set to memory://."
+                    "Delete this env var — the app auto-detects REDIS_URL."
+                )
+                raise RuntimeError(msg)
+            if not uri.startswith(("redis://", "memory://", "mongodb://", "sentinel://")):
+                msg = (
+                    f"CRITICAL ERROR: {name} has unknown scheme ({uri}). "
+                    "Delete this env var to let the app auto-detect from REDIS_URL, "
+                    "or set a valid Redis URI like redis://.../0."
                 )
                 raise RuntimeError(msg)
 
@@ -219,27 +226,30 @@ class ProductionConfig(BaseConfig):
     def _warn_redis_config(cls):
         from flask import current_app  # noqa: PLC0415
 
-        _rate_limit_uri = (os.environ.get("RATE_LIMIT_STORAGE_URI") or "memory://").strip()
-        if "memory" in _rate_limit_uri:
+        _has_redis = bool(os.environ.get("REDIS_URL"))
+        _rate_set = bool(os.environ.get("RATE_LIMIT_STORAGE_URI"))
+        _blacklist_set = bool(os.environ.get("JWT_BLACKLIST_STORAGE_URI"))
+        _blacklist_enabled = os.environ.get("JWT_BLACKLIST_ENABLED", "").strip()
+
+        if not _has_redis:
             current_app.logger.warning(
-                "RATE_LIMIT_STORAGE_URI is memory:// in Production. "
-                "4 workers x 10 req/min = 40 req/min effective limit. "
-                "Add Redis plugin and set RATE_LIMIT_STORAGE_URI to a Redis URL."
+                "Production: No REDIS_URL detected. Rate limits are per-worker "
+                "(4 workers x 10 req/min = 40 req/min effective). "
+                "Add Redis plugin in Railway dashboard for global rate limiting."
+            )
+        elif not _rate_set:
+            current_app.logger.info(
+                "Production: Auto-detected REDIS_URL → using Redis for rate limiting."
             )
 
-        _blacklist_enabled = os.environ.get("JWT_BLACKLIST_ENABLED", "0").strip()
-        if _blacklist_enabled not in {"1", "true", "yes"}:
-            current_app.logger.warning(
-                "JWT_BLACKLIST_ENABLED is not set to 1 in Production. "
-                "Logout does not invalidate JWT tokens. Add a Redis plugin in Railway "
-                "dashboard, set JWT_BLACKLIST_STORAGE_URI to a Redis URL, "
-                "and set JWT_BLACKLIST_ENABLED=1."
+        if _has_redis and not _blacklist_set and not _blacklist_enabled:
+            current_app.logger.info(
+                "Production: Auto-detected REDIS_URL → JWT blacklist enabled automatically."
             )
-        elif "memory" in (os.environ.get("JWT_BLACKLIST_STORAGE_URI") or "memory://"):
+        elif not _has_redis and _blacklist_enabled not in {"1", "true", "yes"}:
             current_app.logger.warning(
-                "JWT_BLACKLIST_STORAGE_URI is set to in-memory storage in Production. "
-                "JWT blacklist is process-local and lost on restart. "
-                "Set JWT_BLACKLIST_STORAGE_URI to a Redis URL."
+                "Production: JWT_BLACKLIST_ENABLED is not set. "
+                "Logout does not invalidate JWT tokens until Redis is provisioned."
             )
 
 

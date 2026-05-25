@@ -61,20 +61,39 @@ def _build_config_obj(config):
     return config
 
 
+def _redis_storage_uri(db_num: int) -> str | None:
+    _redis_url = (os.environ.get("REDIS_URL") or "").rstrip("/")
+    if _redis_url:
+        return f"{_redis_url}/{db_num}"
+    return None
+
+
 def _init_extensions(app):
     """Bind Flask extensions and apply app-level config."""
     db.init_app(app)
     jwt.init_app(app)
     migrate.init_app(app, db)
 
-    _rate_limit_storage = os.environ.get("RATE_LIMIT_STORAGE_URI", "memory://")
+    _rate_limit_storage = (
+        os.environ.get("RATE_LIMIT_STORAGE_URI")
+        or _redis_storage_uri(0)
+        or "memory://"
+    )
     app.config.setdefault("RATELIMIT_STORAGE_URI", _rate_limit_storage)
     app.config.setdefault("RATELIMIT_DEFAULT", "200 per day; 50 per hour")
     limiter.init_app(app)
 
-    _blacklist_storage = os.environ.get("JWT_BLACKLIST_STORAGE_URI", "memory://")
+    _blacklist_storage = (
+        os.environ.get("JWT_BLACKLIST_STORAGE_URI")
+        or _redis_storage_uri(1)
+        or "memory://"
+    )
     app.config.setdefault("JWT_BLACKLIST_STORAGE_URI", _blacklist_storage)
-    app.config.setdefault("JWT_BLACKLIST_ENABLED", os.environ.get("JWT_BLACKLIST_ENABLED", "0"))
+    app.config.setdefault(
+        "JWT_BLACKLIST_ENABLED",
+        os.environ.get("JWT_BLACKLIST_ENABLED")
+        or ("1" if _redis_storage_uri(0) else "0"),
+    )
     if _blacklist_storage.startswith("redis"):
         get_redis_client()
 
@@ -151,18 +170,7 @@ def _init_sentry():
 
 
 def _warn_production_config(app):
-    """Warn about missing Redis / JWT blacklist config in production."""
-    _rate = os.environ.get("RATE_LIMIT_STORAGE_URI", "memory://")
-    if "memory" in _rate:
-        app.logger.warning(
-            "Production: RATE_LIMIT_STORAGE_URI is memory:// — rate limits are "
-            "per-worker, not global. 4 workers x 10 req/min = 40 req/min effective."
-        )
-    if os.environ.get("JWT_BLACKLIST_ENABLED", "0").strip() not in {"1", "true", "yes"}:
-        app.logger.warning(
-            "Production: JWT_BLACKLIST_ENABLED is not set — logout is a no-op. "
-            "Tokens remain valid until expiry."
-        )
+    """Warn about missing Redis / JWT blacklist (delegated to config.py)."""
 
 
 def _configure_cors(app):
