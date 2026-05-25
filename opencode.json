@@ -6,7 +6,7 @@
       "command": ["npx", "@testsprite/testsprite-mcp@latest"],
       "enabled": true,
       "env": {
-        "API_KEY": "sk-user-rEtE5Tr2wbZ4mwARavtJteCFavZqK-Tgsjko2N0lAb2TM08kTCHfG7VIC3cnV9JhQbQHXYiNGnv8e98YwIiRm4Jw7TSMMy9M93SX7f4cdfssoP8u0E8z0BmHbqbzHs3iptc"
+        "API_KEY": ""
       }
     }
   }

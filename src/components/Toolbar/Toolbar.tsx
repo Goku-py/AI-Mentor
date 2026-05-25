@@ -56,7 +56,12 @@ export default function Toolbar({
         <button className="font-btn" title="Increase font" onClick={onIncreaseFont} aria-label="Increase font size">A+</button>
         <button title="Toggle dark/light" onClick={onToggleDarkMode} aria-label="Toggle dark mode">{darkMode ? <SunIcon /> : <MoonIcon />}</button>
         <button title="Next language" onClick={onCycleLanguage} aria-label="Cycle to next language"><LanguageIcon /></button>
-        <button title="Upload code file" onClick={onFileUploadClick} aria-label="Upload code file"><UploadIcon /></button>
+        <button
+          title="Upload code file"
+          aria-label="Upload code file"
+          onClick={onFileUploadClick}
+          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onFileUploadClick(); } }}
+        ><UploadIcon /></button>
         <LanguageSelector language={language} onLanguageChange={onLanguageChange} />
         <button
           className="run-btn"

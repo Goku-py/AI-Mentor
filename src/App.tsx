@@ -2,6 +2,7 @@ import { useAuth } from "./hooks/useAuth";
 import { useSettings } from "./hooks/useSettings";
 import { useCode } from "./hooks/useCode";
 import ErrorBoundary from "./components/ErrorBoundary";
+import ToastContainer from "./components/Toast";
 import Toolbar from "./components/Toolbar/Toolbar";
 import EditorPane from "./components/Editor/EditorPane";
 import OutputPane from "./components/Output/OutputPane";
@@ -20,6 +21,7 @@ export default function App() {
 
   return (
     <ErrorBoundary>
+      <ToastContainer />
       <div className="app-container">
         {auth.showAuthModal && (
           <AuthModal
@@ -37,7 +39,8 @@ export default function App() {
         <input
           type="file"
           accept=".py,.js,.java,.c,.cpp,.cc,.cxx"
-          style={{ display: "none" }}
+          className="sr-only"
+          tabIndex={-1}
           ref={code.fileInputRef}
           onChange={code.handleFileChange}
         />

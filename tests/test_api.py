@@ -32,7 +32,7 @@ class TestHealthEndpoint:
         assert "ok" in data["db"]
         assert "sandbox" in data
         assert "ok" in data["sandbox"]
-        assert "metrics" in data
+        assert "metrics" not in data  # metrics are only available via /metrics
 
 
 class TestToolsEndpoint:

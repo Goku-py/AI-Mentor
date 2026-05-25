@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Code Mentor — Remediation Phases Plan</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    color: #c9d1d9; background: #0d1117; line-height: 1.6; padding: 2rem;
+  }
+  .container { max-width: 1000px; margin: 0 auto; }
+  h1 { font-size: 2rem; margin-bottom: 0.25rem; color: #f0f6fc; }
+  .subtitle { color: #8b949e; margin-bottom: 2rem; font-size: 1rem; }
+  h2 {
+    font-size: 1.35rem; margin: 2.5rem 0 1rem; padding-bottom: 0.4rem;
+    border-bottom: 2px solid #30363d; color: #58a6ff;
+  }
+  h3 {
+    font-size: 1.1rem; margin: 1.5rem 0 0.75rem; color: #f0f6fc;
+    background: #161b22; padding: 0.5rem 0.75rem; border-radius: 6px;
+    border-left: 3px solid #2f81f7;
+  }
+  h4 { font-size: 1rem; margin: 1.25rem 0 0.5rem; color: #f0f6fc; }
+  table {
+    width: 100%; border-collapse: collapse; margin-bottom: 1.5rem;
+    font-size: 0.9rem;
+  }
+  th, td {
+    border: 1px solid #30363d; padding: 0.4rem 0.6rem; text-align: left;
+    vertical-align: top;
+  }
+  th { background: #161b22; color: #8b949e; font-weight: 600; }
+  td { background: #0d1117; }
+  code {
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: 0.85em; padding: 0.15em 0.3em; border-radius: 3px;
+    background: #1c2128; color: #f0f6fc;
+  }
+  .phase-badge {
+    display: inline-block; padding: 0.2rem 0.6rem; border-radius: 12px;
+    font-size: 0.75rem; font-weight: 600; vertical-align: middle;
+  }
+  .phase-0 { background: #3d1114; color: #f85149; }
+  .phase-1 { background: #3d2e00; color: #d29922; }
+  .phase-2 { background: #1f3a5f; color: #58a6ff; }
+  .phase-3 { background: #1b3a2d; color: #3fb950; }
+  .phase-4 { background: #2f1f3d; color: #bc8cff; }
+  .phase-5 { background: #1c2128; color: #8b949e; }
+  .tag {
+    display: inline-block; padding: 0.1rem 0.4rem; border-radius: 8px;
+    font-size: 0.7rem; font-weight: 600;
+  }
+  .tag-blocker { background: #3d1114; color: #f85149; }
+  .tag-sec { background: #3d2e00; color: #d29922; }
+  .tag-be { background: #1f3a5f; color: #58a6ff; }
+  .tag-fe { background: #3d1f3d; color: #d2a8ff; }
+  .tag-ops { background: #1b3a2d; color: #3fb950; }
+  .tag-test { background: #2f1f3d; color: #bc8cff; }
+  .tag-ci { background: #1c2128; color: #f0f6fc; border: 1px solid #30363d; }
+  .dep-graph {
+    background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+    padding: 1.25rem; font-family: "SFMono-Regular", Consolas, monospace;
+    font-size: 0.9rem; line-height: 2; margin: 1rem 0;
+  }
+  ul, ol { padding-left: 1.25rem; margin-bottom: 1rem; }
+  li { margin-bottom: 0.3rem; }
+  hr { border: none; border-top: 1px solid #30363d; margin: 2rem 0; }
+  .summary-box {
+    background: #161b22; border: 1px solid #30363d; border-radius: 8px;
+    padding: 1rem 1.25rem; margin-bottom: 1.5rem;
+  }
+  .summary-box p { margin-bottom: 0.5rem; }
+  .issue-list { margin: 0.5rem 0 0 1.5rem; }
+  @media (max-width: 640px) { body { padding: 1rem; } }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>AI Code Mentor — Remediation Phases Plan</h1>
+<p class="subtitle">Phase-wise plan to fix all issues from the production-readiness audit. Ordered by risk reduction — each phase is deployable independently.</p>
+
+<div class="summary-box">
+<p><strong>Total estimate:</strong> ~30 engineering days over 6 weeks</p>
+<p><strong>Phase 0 blocks shipping.</strong> Phases 1-2 are the bulk (~80% of risk reduction). Phase 3-4 is hardening. Phase 5 is ongoing maintenance.</p>
+</div>
+
+<!-- ==================== PHASE 0 ==================== -->
+<h2><span class="phase-badge phase-0">Phase 0</span> Emergency Blocker Fixes — Week 1</h2>
+<p><em>Cannot ship without these. Zero-deployment-risk changes only.</em></p>
+
+<table>
+  <thead>
+    <tr><th>#</th><th>Fix</th><th>Files</th><th>Risk Prevents</th><th>Effort</th><th>Tag</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>0.1</td>
+      <td><strong>SQLite guard in production</strong> — add <code>ProductionConfig.validate()</code> check for <code>sqlite</code> in <code>DATABASE_URL</code></td>
+      <td><code>config.py:141-168</code></td>
+      <td>Multi-worker corruption, data loss</td>
+      <td>15m</td>
+      <td><span class="tag tag-blocker">Blocker</span></td>
+    </tr>
+    <tr>
+      <td>0.2</td>
+      <td><strong>Redis requirement guard</strong> — fail startup if <code>RATE_LIMIT_STORAGE_URI</code> is not <code>redis://</code> when <code>ENV=production</code></td>
+      <td><code>config.py</code>, <code>__init__.py:_init_extensions</code></td>
+      <td>Per-worker rate-limit bypass (4× intended limit)</td>
+      <td>30m</td>
+      <td><span class="tag tag-blocker">Blocker</span></td>
+    </tr>
+    <tr>
+      <td>0.3</td>
+      <td><strong><code>JWT_BLACKLIST_ENABLED</code> forced on in production</strong> — add validate check</td>
+      <td><code>config.py</code> (validate method)</td>
+      <td>Logout ineffective across workers</td>
+      <td>15m</td>
+      <td><span class="tag tag-blocker">Blocker</span></td>
+    </tr>
+    <tr>
+      <td>0.4</td>
+      <td><strong>Startup warning for unset <code>ANALYZE_API_KEY</code></strong> — log <code>CRITICAL</code> warning if not set in prod</td>
+      <td><code>__init__.py:create_app</code></td>
+      <td>Anonymous analyze access unknown to admins</td>
+      <td>15m</td>
+      <td><span class="tag tag-sec">Security</span></td>
+    </tr>
+    <tr>
+      <td>0.5</td>
+      <td><strong>Gemini output answer-leak filter</strong> — scan for code blocks (<code>```</code>) in Gemini response; strip and set <code>ai_mentor_status: "bad_response"</code></td>
+      <td><code>analyzer.py:_get_ai_mentorship</code></td>
+      <td>Prompt injection leaks full solutions</td>
+      <td>45m</td>
+      <td><span class="tag tag-blocker">Blocker</span></td>
+    </tr>
+    <tr>
+      <td>0.6</td>
+      <td><strong>Audit log auto-prune</strong> — delete rows older than 90 days</td>
+      <td><code>audit_log.py</code> + startup hook</td>
+      <td>Unbounded table growth (345K rows/day)</td>
+      <td>30m</td>
+      <td><span class="tag tag-ops">Ops</span></td>
+    </tr>
+  </tbody>
+</table>
+
+<p><strong>Verification:</strong> After Phase 0, run the full Release Readiness Checklist from the testing plan. All critical paths gated.</p>
+
+<hr>
+
+<!-- ==================== PHASE 1 ==================== -->
+<h2><span class="phase-badge phase-1">Phase 1</span> Security Hardening — Weeks 2-3</h2>
+
+<h3>1A — Auth &amp; Token Security</h3>
+<table>
+  <thead>
+    <tr><th>#</th><th>Fix</th><th>Detail</th><th>Effort</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>1A.1</td>
+      <td><strong>Refresh token rotation</strong></td>
+      <td>On <code>/refresh</code>, issue new refresh token AND add old JTI to blacklist. Each refresh invalidates the previous token.</td>
+      <td>1-2d</td>
+    </tr>
+    <tr>
+      <td>1A.2</td>
+      <td><strong>Role amplification test</strong></td>
+      <td>pytest: send <code>{"role":"admin"}</code> in register body, verify DB stores <code>"student"</code>. New <code>TestRoleEnforcement</code> class.</td>
+      <td>30m</td>
+    </tr>
+    <tr>
+      <td>1A.3</td>
+      <td><strong>JWT role claim is advisory only</strong></td>
+      <td>Add <code>_require_role()</code> middleware that reads role from DB, not JWT claims. Future-proofs against tampered tokens.</td>
+      <td>1d</td>
+    </tr>
+    <tr>
+      <td>1A.4</td>
+      <td><strong>Brute-force email enumeration test</strong></td>
+      <td>✅ Already returns same error for nonexistent/wrong password. Add test to lock this behavior.</td>
+      <td>15m</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>1B — Sandbox Hardening</h3>
+<table>
+  <thead>
+    <tr><th>#</th><th>Fix</th><th>Detail</th><th>Effort</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>1B.1</td>
+      <td><strong>Container cleanup on crash</strong></td>
+      <td>Verify <code>container.remove(force=True)</code> fires on all exit paths in <code>run_in_sandbox</code> — review all return/raise paths.</td>
+      <td>30m</td>
+    </tr>
+    <tr>
+      <td>1B.2</td>
+      <td><strong>Stderr truncation for large output</strong></td>
+      <td>Cap <code>container.logs()</code> to 10K lines to prevent OOM on log parsing.</td>
+      <td>15m</td>
+    </tr>
+    <tr>
+      <td>1B.3</td>
+      <td><strong>Container resource limit test</strong></td>
+      <td>pytest: allocate 64MB+ in sandbox, verify container killed. New <code>TestSandboxResourceLimits</code>.</td>
+      <td>1d</td>
+    </tr>
+    <tr>
+      <td>1B.4</td>
+      <td><strong>Disable host execution entirely</strong></td>
+      <td>Remove <code>HOST_EXECUTION_ENABLED</code> feature flag entirely. Production must never run code on host.</td>
+      <td>30m</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>1C — Prompt Injection &amp; Output Sanitization</h3>
+<table>
+  <thead>
+    <tr><th>#</th><th>Fix</th><th>Detail</th><th>Effort</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>1C.1</td>
+      <td><strong>Gemini output content-safety filter</strong></td>
+      <td>After receiving Gemini response, scan for code blocks, <code>"here's the code"</code> patterns, &gt;N lines of code. Reject with <code>"bad_response"</code>.</td>
+      <td>1-2d</td>
+    </tr>
+    <tr>
+      <td>1C.2</td>
+      <td><strong>Prompt injection fuzzing test</strong></td>
+      <td>Parameterized pytest with 20+ injection payloads, verify no <code>"ok"</code> status when answer leaks.</td>
+      <td>1d</td>
+    </tr>
+    <tr>
+      <td>1C.3</td>
+      <td><strong>Sentry PII configuration</strong></td>
+      <td>Add <code>before_send</code> callback to strip <code>GEMINI_API_KEY</code> and any request body containing code in Sentry breadcrumbs.</td>
+      <td>30m</td>
+    </tr>
+  </tbody>
+</table>
+
+<h3>1D — XSS &amp; Output Safety</h3>
+<table>
+  <thead>
+    <tr><th>#</th><th>Fix</th><th>Detail</th><th>Effort</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>1D.1</td>
+      <td><strong>Frontend output rendering check</strong></td>
+      <td>Verify <code>&lt;OutputPane&gt;</code> uses <code>textContent</code> not <code>innerHTML</code>. Add unit test.</td>
+      <td>30m</td>
+    </tr>
+    <tr>
+      <td>1D.2</td>
+      <td><strong>Content-type enforcement test</strong></td>
+      <td>✅ All responses use <code>jsonify()</code>. Add E2E test confirming <code>Content-Type: application/json</code>.</td>
+      <td>15m</td>
+    </tr>
+    <tr>
+      <td>1D.3</td>
+      <td><strong>E2E XSS test</strong></td>
+      <td>Send <code>&lt;script&gt;alert(1)&lt;/script&gt;</code> as code, verify output rendered as escaped text.</td>
+      <td>30m</td>
+    </tr>
+  </tbody>
+</table>
+
+<hr>
+
+<!-- ==================== PHASE 2 ==================== -->
+<h2><span class="phase-badge phase-2">Phase 2</span> Test Infrastructure Buildout — Weeks 3-4</h2>
+
+<h3>2A — Frontend Unit Tests (Missing Entirely)</h3>
+<table>
+  <thead>
+    <tr><th>#</th><th>Test Suite</th><th>File</th><th>Scope</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>2A.1</td><td><code>useCode</code> hook</td><td><code>src/hooks/__tests__/useCode.test.ts</code></td><td>Run flow, error flow, CSRF retry, abort, language switch</td></tr>
+    <tr><td>2A.2</td><td><code>useAuth</code> hook</td><td><code>src/hooks/__tests__/useAuth.test.ts</code></td><td>Login success/fail, token refresh, logout, session restore</td></tr>
+    <tr><td>2A.3</td><td><code>useSettings</code> hook</td><td><code>src/hooks/__tests__/useSettings.test.ts</code></td><td>Toggle dark/light, font size, fullscreen</td></tr>
+    <tr><td>2A.4</td><td>API service</td><td><code>src/services/__tests__/api.test.ts</code></td><td><code>fetchCsrfToken</code>, <code>analyzeCode</code>, <code>authFetch</code>, <code>tryRefreshToken</code></td></tr>
+    <tr><td>2A.5</td><td>ErrorBoundary component</td><td><code>src/components/__tests__/ErrorBoundary.test.tsx</code></td><td>Catches error, shows fallback</td></tr>
+    <tr><td>2A.6</td><td>Toast component</td><td><code>src/components/__tests__/Toast.test.tsx</code></td><td>Show, auto-dismiss, multiple toasts</td></tr>
+    <tr><td>2A.7</td><td>AuthModal component</td><td><code>src/components/__tests__/AuthModal.test.tsx</code></td><td>Tab switch, validation errors, submit states</td></tr>
+  </tbody>
+</table>
+
+<h3>2B — Backend Test Coverage Gaps</h3>
+<table>
+  <thead>
+    <tr><th>#</th><th>Test</th><th>File</th><th>Priority</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>2B.1</td><td>Race condition: 6 concurrent <code>/analyze</code> → 1st-4th = 200, 5th-6th = 503</td><td><code>tests/test_api.py</code> — <code>TestConcurrencyLimit</code></td><td>Must</td></tr>
+    <tr><td>2B.2</td><td>Global rate limit enforced with Redis mock</td><td><code>tests/test_api.py</code> — <code>TestRateLimitWithRedis</code></td><td>Must</td></tr>
+    <tr><td>2B.3</td><td>JWT blacklist with Redis mock</td><td><code>tests/test_auth.py</code> — <code>TestJWTBlacklist</code></td><td>Must</td></tr>
+    <tr><td>2B.4</td><td>Gemini all error states mapped correctly</td><td><code>tests/test_analyzer.py</code> — <code>TestAiMentorStatus</code></td><td>Should</td></tr>
+    <tr><td>2B.5</td><td><code>ProductionConfig.validate()</code> — all failure modes</td><td><code>tests/test_config.py</code> — new</td><td>Must</td></tr>
+    <tr><td>2B.6</td><td>Migration idempotency — <code>flask db upgrade</code> twice</td><td><code>tests/test_migrations.py</code> — new</td><td>Should</td></tr>
+    <tr><td>2B.7</td><td><code>/metrics</code> accessibility with/without API key</td><td><code>tests/test_api.py</code> — <code>TestMetricsEndpoint</code></td><td>Should</td></tr>
+  </tbody>
+</table>
+
+<h3>2C — Load Testing (k6)</h3>
+<table>
+  <thead>
+    <tr><th>#</th><th>Test</th><th>VUs</th><th>Duration</th><th>Assertion</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>2C.1</td><td>Baseline</td><td>1</td><td>10s</td><td>p50 &lt; 5s, p95 &lt; 15s</td></tr>
+    <tr><td>2C.2</td><td>Concurrency at 4</td><td>4</td><td>30s</td><td>All 200, no 503</td></tr>
+    <tr><td>2C.3</td><td>Overload at 8</td><td>8</td><td>30s</td><td>4 succeed, 4 get 503</td></tr>
+    <tr><td>2C.4</td><td>Gemini quota exhaustion</td><td>1</td><td>Continuous</td><td>5001st → <code>"quota_exceeded"</code>, code still runs</td></tr>
+    <tr><td>2C.5</td><td>Soak (1h)</td><td>1 req/5s</td><td>1h</td><td>No memory leak, no latency creep</td></tr>
+  </tbody>
+</table>
+
+<hr>
+
+<!-- ==================== PHASE 3 ==================== -->
+<h2><span class="phase-badge phase-3">Phase 3</span> Operational Hardening — Weeks 4-5</h2>
+
+<table>
+  <thead>
+    <tr><th>#</th><th>Fix</th><th>Detail</th><th>Effort</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>3.1</td>
+      <td><strong>Enhanced health endpoint</strong></td>
+      <td>Add per-service status: <code>gemini: {ok: bool}</code>, <code>redis: {ok: bool}</code>, <code>docker: {ok: bool, images_present: bool}</code></td>
+      <td>1d</td>
+    </tr>
+    <tr>
+      <td>3.2</td>
+      <td><strong>Startup probe for sandbox images</strong></td>
+      <td>Verify all 4 Docker images are pulled before Gunicorn starts serving traffic</td>
+      <td>1d</td>
+    </tr>
+    <tr>
+      <td>3.3</td>
+      <td><strong>Graceful shutdown</strong></td>
+      <td>Register <code>SIGTERM</code> handler that stops accepting new requests and drains in-flight (stop new semaphore acquires)</td>
+      <td>1d</td>
+    </tr>
+    <tr>
+      <td>3.4</td>
+      <td><strong>Structured logging for security events</strong></td>
+      <td>All <code>SECURITY_METRICS</code> increments logged at WARNING level with full context (IP, UA, path)</td>
+      <td>30m</td>
+    </tr>
+    <tr>
+      <td>3.5</td>
+      <td><strong>Audit log composite index</strong></td>
+      <td>Add <code>(user_id, timestamp)</code> composite index for history queries</td>
+      <td>30m</td>
+    </tr>
+    <tr>
+      <td>3.6</td>
+      <td><strong>Cache-control for static assets</strong></td>
+      <td>Set <code>Cache-Control: public, max-age=31536000, immutable</code> for hashed assets; <code>no-cache</code> for <code>index.html</code></td>
+      <td>30m</td>
+    </tr>
+    <tr>
+      <td>3.7</td>
+      <td><strong>Rate-limit response headers</strong></td>
+      <td>Ensure <code>X-RateLimit-Remaining</code>, <code>X-RateLimit-Reset</code> sent (Flask-Limiter default when <code>RATELIMIT_HEADERS_ENABLED=True</code>)</td>
+      <td>15m</td>
+    </tr>
+  </tbody>
+</table>
+
+<hr>
+
+<!-- ==================== PHASE 4 ==================== -->
+<h2><span class="phase-badge phase-4">Phase 4</span> CI/CD &amp; Production Hardening — Weeks 5-6</h2>
+
+<table>
+  <thead>
+    <tr><th>#</th><th>Fix</th><th>Detail</th><th>Effort</th></tr>
+  </thead>
+  <tbody>
+    <tr>
+      <td>4.1</td>
+      <td><strong>DAST scan in CI</strong></td>
+      <td>Add OWASP ZAP baseline scan against a deployed preview environment</td>
+      <td>1-2d</td>
+    </tr>
+    <tr>
+      <td>4.2</td>
+      <td><strong>Bandit SAST in CI</strong></td>
+      <td>Add <code>bandit -r . -f json -o bandit_output.json</code> step. Config already exists (<code>.bandit</code> in project root)</td>
+      <td>30m</td>
+    </tr>
+    <tr>
+      <td>4.3</td>
+      <td><strong>CSP <code>report-uri</code></strong></td>
+      <td>Add <code>report-uri</code> directive to CSP header for violation monitoring</td>
+      <td>30m</td>
+    </tr>
+    <tr>
+      <td>4.4</td>
+      <td><strong>Frontend Sentry integration</strong></td>
+      <td>Add <code>@sentry/react</code> to <code>src/main.tsx</code> for frontend error monitoring</td>
+      <td>1d</td>
+    </tr>
+    <tr>
+      <td>4.5</td>
+      <td><strong>CI matrix for Python 3.11 + 3.12</strong></td>
+      <td>Add <code>strategy.matrix.python-version</code> to backend test jobs</td>
+      <td>30m</td>
+    </tr>
+    <tr>
+      <td>4.6</td>
+      <td><strong>Block CI on high/critical vulns</strong></td>
+      <td>Remove <code>continue-on-error</code> from <code>npm audit</code> and <code>pip-audit</code> steps</td>
+      <td>15m</td>
+    </tr>
+  </tbody>
+</table>
+
+<hr>
+
+<!-- ==================== PHASE 5 ==================== -->
+<h2><span class="phase-badge phase-5">Phase 5</span> Ongoing — Post-Launch, Continuous</h2>
+
+<table>
+  <thead>
+    <tr><th>#</th><th>Item</th><th>Cadence</th><th>Detail</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>5.1</td><td>3rd-party penetration test</td><td>Quarterly</td><td>Full-scope security audit including sandbox escape attempts</td></tr>
+    <tr><td>5.2</td><td>Dependency updates (Dependabot/Renovate)</td><td>Weekly</td><td>Auto-PR for <code>npm audit</code> + <code>pip-audit</code> fixes</td></tr>
+    <tr><td>5.3</td><td>Chaos experiments</td><td>Monthly</td><td>Kill DB, Docker, Redis independently; verify graceful degradation</td></tr>
+    <tr><td>5.4</td><td>Prompt injection red-team</td><td>Monthly</td><td>Rotate payload set, run against Gemini, update server-side filters</td></tr>
+    <tr><td>5.5</td><td>Performance regression bench</td><td>Per release</td><td>Track p50/p95 analyze times against baseline</td></tr>
+    <tr><td>5.6</td><td>Sandbox image updates</td><td>Monthly</td><td>Rebuild images, update SHA256 pins in <code>config.py</code></td></tr>
+    <tr><td>5.7</td><td>Table bloat check</td><td>Weekly alert</td><td>Monitor <code>audit_logs</code> size, adjust prune window</td></tr>
+    <tr><td>5.8</td><td>Refresh token rotation audit</td><td>Quarterly</td><td>Verify no token reuse in audit logs</td></tr>
+  </tbody>
+</table>
+
+<hr>
+
+<!-- ==================== DEPENDENCY GRAPH ==================== -->
+<h2>Dependency Graph</h2>
+<div class="dep-graph">
+Phase 0 ────────────► Phase 1 ────────────► Phase 2 ────────────► Phase 3<br>
+&emsp;│&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;│&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;│&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;│<br>
+&emsp;├─ 0.1 SQLite guard&emsp;&emsp;&emsp;├─ 1A Auth hardening&emsp;&emsp;├─ 2A Frontend tests&emsp;├─ 3.1 Enhanced health<br>
+&emsp;├─ 0.2 Redis required&emsp;&emsp;├─ 1B Sandbox&emsp;&emsp;&emsp;&emsp;├─ 2B Backend coverage&emsp;├─ 3.2 Startup probe<br>
+&emsp;├─ 0.3 Blacklist forced&emsp;&emsp;├─ 1C Prompt injection&emsp;├─ 2C Load tests&emsp;&emsp;&emsp;├─ 3.3 Graceful shutdown<br>
+&emsp;├─ 0.4 API key warning&emsp;├─ 1D XSS prevention&emsp;&emsp;│&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;├─ 3.4-3.7 Observability<br>
+&emsp;├─ 0.5 Answer filter&emsp;&emsp;&emsp;│&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;│&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;│<br>
+&emsp;└─ 0.6 Audit prune&emsp;&emsp;&emsp;&emsp;└────────────────────────┘&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;│<br>
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;│<br>
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;Phase 4 ◄────────────────────────┘<br>
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;│<br>
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;├─ 4.1 DAST in CI<br>
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;├─ 4.2 Bandit in CI<br>
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;├─ 4.3 CSP report-uri<br>
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;├─ 4.4 Frontend Sentry<br>
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;├─ 4.5 CI matrix<br>
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;└─ 4.6 CI vuln blocking<br>
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;<br>
+&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;&emsp;Phase 5 (ongoing, no gate)
+</div>
+
+<hr>
+
+<h2>Effort Summary</h2>
+<table>
+  <thead>
+    <tr><th>Phase</th><th>Focus</th><th>Items</th><th>Eng Days</th><th>Test Days</th><th>Risk Reduction</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>0</td><td>Emergency blocker fixes</td><td>6</td><td>1</td><td>1</td><td>40%</td></tr>
+    <tr><td>1</td><td>Security hardening</td><td>14</td><td>5</td><td>3</td><td>30%</td></tr>
+    <tr><td>2</td><td>Test infrastructure</td><td>19</td><td>3</td><td>8</td><td>15%</td></tr>
+    <tr><td>3</td><td>Operational hardening</td><td>7</td><td>3</td><td>1</td><td>10%</td></tr>
+    <tr><td>4</td><td>CI/CD hardening</td><td>6</td><td>3</td><td>2</td><td>5%</td></tr>
+    <tr style="font-weight:600;border-top:2px solid #58a6ff"><td><strong>Total</strong></td><td></td><td><strong>52</strong></td><td><strong>15</strong></td><td><strong>15</strong></td><td><strong>100%</strong></td></tr>
+  </tbody>
+</table>
+
+</div>
+</body>
+</html>

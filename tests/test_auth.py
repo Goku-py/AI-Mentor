@@ -19,6 +19,7 @@ VALID_EMAIL = "auth_test@example.local"
 VALID_PASS = "ValidPass1!"
 WEAK_PASS = "short"  # < 8 chars
 NO_DIGIT_OR_SYMBOL = "onlylower"  # 8 chars but no digit or special char
+LOCKOUT_EMAIL = "lockout_test@example.local"
 
 
 # ---------------------------------------------------------------------------
@@ -200,6 +201,50 @@ class TestLogout:
         assert r.status_code == 401
 
 
+# ---------------------------------------------------------------------------
+# Account Lockout
+# ---------------------------------------------------------------------------
+class TestAccountLockout:
+    """Account lockout after repeated failed login attempts."""
+
+    def _register(self, client, email=LOCKOUT_EMAIL, password=VALID_PASS):
+        client.post("/api/v1/auth/register", json={"email": email, "password": password})
+
+    def test_lockout_after_5_failures(self, client):
+        """After 5 wrong password attempts, account returns 423."""
+        self._register(client)
+        for _ in range(5):
+            r = client.post(
+                "/api/v1/auth/login",
+                json={"email": LOCKOUT_EMAIL, "password": "wrongpass1!"},
+            )
+        # 6th attempt should be locked
+        r = client.post(
+            "/api/v1/auth/login",
+            json={"email": LOCKOUT_EMAIL, "password": VALID_PASS},
+        )
+        assert r.status_code == 423
+        assert "locked" in r.get_json()["error"].lower()
+
+    def test_correct_password_resets_lockout(self, client):
+        """A successful login before lockout resets the attempt counter."""
+        self._register(client)
+        for _ in range(3):
+            client.post(
+                "/api/v1/auth/login",
+                json={"email": LOCKOUT_EMAIL, "password": "wrongpass1!"},
+            )
+        # Correct password resets counter
+        r = client.post(
+            "/api/v1/auth/login",
+            json={"email": LOCKOUT_EMAIL, "password": VALID_PASS},
+        )
+        assert r.status_code == 200
+
+
+# ---------------------------------------------------------------------------
+# GitHub OAuth
+# ---------------------------------------------------------------------------
 class TestGithubOAuth:
     """GET /api/v1/auth/github/login and /api/v1/auth/github/callback"""
 

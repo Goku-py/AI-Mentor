@@ -20,6 +20,7 @@ from dataclasses import dataclass
 from typing import Any
 
 import httpx
+from flask import current_app
 
 from app_pkg.security.middleware import SECURITY_METRICS
 
@@ -80,6 +81,19 @@ def verify_tools() -> dict[str, bool]:
     return tools
 
 
+def _sandbox_image(language: str, fallback: str) -> str:
+    """Resolve sandbox image from Flask config (pinned by SHA256 digest).
+
+    Falls back to the provided *fallback* when outside an app context
+    (e.g. during import-time tool verification).
+    """
+    try:
+        images = current_app.config.get("SANDBOX_IMAGES", {})
+    except RuntimeError:
+        return fallback
+    return images.get(language, fallback)
+
+
 def _empty_execution() -> dict[str, Any]:
     return {
         "stdout": "",
@@ -113,11 +127,15 @@ def _sandbox_env() -> dict[str, str]:
 def _limit_resources_linux() -> None:
     if not sys.platform.startswith("linux"):
         return
+    import os as _os  # noqa: PLC0415
     import resource  # noqa: PLC0415
 
+    _os.nice(19)
+    _os.setpgrp()
     memory_limit = 64 * 1024 * 1024
     resource.setrlimit(resource.RLIMIT_AS, (memory_limit, memory_limit))
     resource.setrlimit(resource.RLIMIT_CPU, (3, 3))
+    resource.setrlimit(resource.RLIMIT_NPROC, (64, 64))
 
 
 def sandbox_runtime_status() -> dict[str, Any]:
@@ -163,13 +181,13 @@ def _sandbox_unavailable_execution(message: str, explanation: str) -> dict[str, 
 
 _HOST_EXECUTION_ENABLED: bool = (
     os.environ.get("HOST_EXECUTION_ENABLED", "").strip() == "1"
-    or os.environ.get("FLASK_ENV", "development") == "development"
 )
 
 
 def _run_host_sandboxed(
     host_cmd: list[str],
     timeout: int,
+    cwd: str | None = None,
 ) -> dict[str, Any]:
     execution = _empty_execution()
     execution["returncode"] = -1
@@ -187,6 +205,7 @@ def _run_host_sandboxed(
             timeout=timeout,
             env=_sandbox_env(),
             preexec_fn=preexec,
+            cwd=cwd,
         )
         execution["stdout"] = proc.stdout or ""
         execution["stderr"] = proc.stderr or ""
@@ -288,7 +307,7 @@ def run_in_sandbox(  # noqa: C901, PLR0911, PLR0912, PLR0915
             if docker is None:
                 if _HOST_EXECUTION_ENABLED:
                     host_cmd = _format_host_cmd(cmd, source_path, tmp_dir, main_class)
-                    return _run_host_sandboxed(host_cmd, timeout_seconds)
+                    return _run_host_sandboxed(host_cmd, timeout_seconds, tmp_dir)
                 execution = _sandbox_unavailable_execution(
                     "Docker SDK is not installed on this server. Fallback execution is disabled.",
                     "Untrusted code execution requires a sandbox. Host fallback is disabled.",
@@ -301,7 +320,7 @@ def run_in_sandbox(  # noqa: C901, PLR0911, PLR0912, PLR0915
             except Exception as docker_err:  # noqa: BLE001
                 if _HOST_EXECUTION_ENABLED:
                     host_cmd = _format_host_cmd(cmd, source_path, tmp_dir, main_class)
-                    return _run_host_sandboxed(host_cmd, timeout_seconds)
+                    return _run_host_sandboxed(host_cmd, timeout_seconds, tmp_dir)
                 execution = _sandbox_unavailable_execution(
                     f"Docker daemon unavailable: {docker_err}",
                     "Sandbox runtime is required for untrusted code execution.",
@@ -790,7 +809,7 @@ def _run_python(code: str, _timeout: float = 3.0, difficulty: str = "beginner") 
     execution = run_in_sandbox(
         code,
         "python",
-        "python:3.11-slim",
+        _sandbox_image("python", "python:3.11-slim"),
         ["python", "{source}"],
         timeout=10,
     )
@@ -940,7 +959,13 @@ def _parse_node_error(stderr: str, difficulty: str = "beginner") -> dict[str, An
 def _run_node(code: str, _timeout: float = 3.0, difficulty: str = "beginner") -> dict[str, Any]:
     execution = _empty_execution()
 
-    execution = run_in_sandbox(code, "javascript", "node:18-slim", ["node", "{source}"], timeout=10)
+    execution = run_in_sandbox(
+        code,
+        "javascript",
+        _sandbox_image("javascript", "node:18-slim"),
+        ["node", "{source}"],
+        timeout=10,
+    )
 
     if execution["returncode"] != 0 and not execution["error"] and execution["stderr"]:
         execution["error"] = _parse_node_error(execution["stderr"], difficulty=difficulty)
@@ -1105,7 +1130,7 @@ def _run_gcc(
     execution = run_in_sandbox(
         source_code,
         language_label,
-        "gcc:12",
+        _sandbox_image("gcc", "gcc:12"),
         ["sh", "-c", f"{compiler} {{source}} -o {{output}} && {{output}}"],
         timeout=10,
     )
@@ -1166,7 +1191,7 @@ def _analyze_java(code: str, _timeout: float = 3.0) -> tuple[list[Issue], dict[s
     execution = run_in_sandbox(
         code,
         "java",
-        "openjdk:17-slim",
+        _sandbox_image("java", "openjdk:17-slim"),
         ["sh", "-c", "javac -d {classes} {source} && java -cp {classes} {main_class}"],
         timeout=10,
     )
@@ -1423,7 +1448,6 @@ async def _get_ai_mentorship(  # noqa: C901, PLR0911, PLR0912, PLR0915
             endpoint = (
                 "https://generativelanguage.googleapis.com/v1beta/"
                 f"models/{urllib.parse.quote_plus(gemini_model)}:generateContent"
-                f"?key={urllib.parse.quote_plus(api_key)}"
             )
             payload = {
                 "contents": [
@@ -1442,10 +1466,12 @@ async def _get_ai_mentorship(  # noqa: C901, PLR0911, PLR0912, PLR0915
             )
 
             _max_retries = 3
-            async with httpx.AsyncClient(timeout=15.0) as client:
+            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
                 for _attempt in range(_max_retries):
                     try:
-                        response = await client.post(endpoint, json=payload)
+                        response = await client.post(
+                            endpoint, json=payload, headers={"X-Goog-Api-Key": api_key},
+                        )
                         status_code = response.status_code
                         raw_body = response.text
                         if status_code == 429 and _attempt < _max_retries - 1:  # noqa: PLR2004

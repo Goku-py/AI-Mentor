@@ -8,3 +8,44 @@ startCommand = "sh -c 'gunicorn --bind 0.0.0.0:$PORT -w 4 --timeout 30 app:app'"
 # PostgreSQL service (provision via Railway dashboard → "New" → "Database" → "PostgreSQL")
 # The DATABASE_URL env var will be auto-injected into the app service.
 # After provisioning, run: railway run flask db upgrade
+
+# ================================================================
+# REQUIRED environment variables — set in Railway dashboard:
+# ================================================================
+#
+#   SECRET_KEY                     — python -c "import secrets; print(secrets.token_hex(32))"
+#   JWT_SECRET_KEY                 — python -c "import secrets; print(secrets.token_hex(32))"
+#   WTF_CSRF_SECRET_KEY            — python -c "import secrets; print(secrets.token_hex(32))"
+#   GEMINI_API_KEY                 — from https://aistudio.google.com/app/apikey
+#   ALLOWED_ORIGINS                — exact frontend URL, e.g. https://your-app.railway.app
+#   FLASK_ENV=production
+#
+#   ⚠ DO NOT SET FLASK_DEBUG — it overrides DEBUG=False per Flask framework.
+#     If FLASK_DEBUG is set to any truthy value, ProductionConfig.validate()
+#     will raise RuntimeError and the app will not start.
+#
+# ================================================================
+# STRONGLY RECOMMENDED (multi-worker safety with Railway Redis plugin):
+# ================================================================
+#
+#   1. Add a Redis plugin: Railway dashboard → "New" → "Database" → "Redis"
+#      Railway auto-injects the REDIS_URL env var into the app service.
+#   2. Set these env vars (using Railway service reference syntax):
+#
+#   RATE_LIMIT_STORAGE_URI         — ${{Redis.REDIS_URL}}/0
+#   JWT_BLACKLIST_STORAGE_URI      — ${{Redis.REDIS_URL}}/1
+#   JWT_BLACKLIST_ENABLED=1
+#
+#   ⚠ The /0 and /1 suffixes select different Redis logical databases
+#     (0 for rate-limits, 1 for JWT blacklist). This prevents key collisions.
+#     Railway resolves ${{Redis.REDIS_URL}} at deploy time.
+#
+# ================================================================
+# OPTIONAL:
+# ================================================================
+#
+#   GEMINI_MODEL                   — default gemini-2.5-flash; override to test newer models
+#   HOST_EXECUTION_ENABLED=1       — enable subprocess sandbox (required when Docker is unavailable)
+#   ANALYZE_API_KEY                — shared secret for /analyze endpoint (prevents anonymous access)
+#   LOG_LEVEL=INFO                 — Python logging level
+# ================================================================

@@ -13,6 +13,7 @@ from __future__ import annotations
 import os
 import re
 import secrets
+from datetime import UTC, datetime, timedelta
 from urllib.parse import quote_plus, urlparse
 
 import requests
@@ -28,13 +29,15 @@ from flask import (
 from flask_jwt_extended import (
     create_access_token,
     create_refresh_token,
+    get_jwt,
     get_jwt_identity,
     jwt_required,
     set_refresh_cookies,
     unset_jwt_cookies,
 )
 
-from app_pkg.extensions import csrf, limiter
+from app_pkg.extensions import csrf, jwt_blacklist_add, limiter
+from app_pkg.utils import coerce_jwt_identity
 from models_pkg import User, db
 
 auth_bp = Blueprint("auth", __name__, url_prefix="/api/v1/auth")
@@ -67,13 +70,6 @@ def _make_tokens(user: User) -> tuple[str, str]:
     access_token = create_access_token(identity=str(user.id), additional_claims=additional_claims)
     refresh_token = create_refresh_token(identity=str(user.id))
     return access_token, refresh_token
-
-
-def _coerce_jwt_identity(raw_identity: object) -> int | None:
-    try:
-        return int(raw_identity)
-    except (TypeError, ValueError):
-        return None
 
 
 def _allowed_frontend_origin() -> str:
@@ -131,8 +127,29 @@ def login():
         return jsonify({"ok": False, "error": "Email and password are required."}), 400
 
     user = User.query.filter_by(email=email, is_active=True).first()
+
+    # Account lockout check
+    if user and user.is_locked():
+        return jsonify({"ok": False, "error": "Account is temporarily locked due to too many failed login attempts. Try again later."}), 423  # noqa: E501
+
     if not user or not user.check_password(password):
+        # Increment failed attempts if user exists
+        if user:
+            user.increment_login_attempts()
+            max_attempts = int(os.environ.get("MAX_LOGIN_ATTEMPTS", "5"))
+            if user.login_attempts >= max_attempts:
+                lockout_minutes = int(os.environ.get("ACCOUNT_LOCKOUT_MINUTES", "15"))
+                user.locked_until = datetime.now(UTC) + timedelta(minutes=lockout_minutes)
+                current_app.logger.warning(
+                    "Account locked due to failed logins",
+                    extra={"email": email, "attempts": user.login_attempts},
+                )
+            db.session.commit()
         return jsonify({"ok": False, "error": "Invalid email or password."}), 401
+
+    # Successful login — reset attempts
+    user.reset_login_attempts()
+    db.session.commit()
 
     access_token, refresh_token = _make_tokens(user)
     response = make_response(
@@ -147,6 +164,13 @@ def login():
 @csrf.exempt
 @jwt_required()
 def logout():
+    # Blacklist the current JWT so it can't be reused
+    jwt_payload = get_jwt()
+    jti = jwt_payload.get("jti", "")
+    exp = jwt_payload.get("exp", None)
+    if jti:
+        jwt_blacklist_add(jti, expires_at=exp)
+
     response = make_response(jsonify({"ok": True, "message": "Logged out successfully."}), 200)
     unset_jwt_cookies(response)
     return response
@@ -154,8 +178,9 @@ def logout():
 
 @auth_bp.route("/me", methods=["GET"])
 @jwt_required()
+@limiter.limit("30 per minute; 500 per day")
 def me():
-    user_id = _coerce_jwt_identity(get_jwt_identity())
+    user_id = coerce_jwt_identity(get_jwt_identity())
     if user_id is None:
         return jsonify({"ok": False, "error": "Invalid authentication token."}), 401
     user = db.session.get(User, user_id)
@@ -167,8 +192,9 @@ def me():
 @auth_bp.route("/refresh", methods=["POST"])
 @csrf.exempt
 @jwt_required(refresh=True)
+@limiter.limit("10 per minute; 50 per day")
 def refresh():
-    user_id = _coerce_jwt_identity(get_jwt_identity())
+    user_id = coerce_jwt_identity(get_jwt_identity())
     if user_id is None:
         return jsonify({"ok": False, "error": "Invalid authentication token."}), 401
     user = db.session.get(User, user_id)
@@ -181,7 +207,7 @@ def refresh():
 
 
 @auth_bp.route("/github/login", methods=["GET"])
-@limiter.limit("5 per minute")
+@limiter.limit("5 per minute; 20 per hour")
 def github_login():
     client_id = os.environ.get("GITHUB_CLIENT_ID")
     if not client_id:
@@ -270,7 +296,7 @@ def _find_or_create_github_user(github_id: str, email: str) -> User:
 
 
 @auth_bp.route("/github/callback", methods=["GET"])
-@limiter.limit("10 per minute")
+@limiter.limit("10 per minute; 30 per hour")
 def github_callback():  # noqa: PLR0911
     code = request.args.get("code")
     state = request.args.get("state")

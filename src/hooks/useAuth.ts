@@ -73,10 +73,34 @@ export function useAuth(): UseAuthReturn {
     async (e: React.FormEvent) => {
       e.preventDefault();
       setAuthError("");
+
       if (!authForm.email || !authForm.password) {
         setAuthError("Please fill in all fields.");
         return;
       }
+      if (authForm.email.length > 254) {
+        setAuthError("Email must be at most 254 characters.");
+        return;
+      }
+      if (!/^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$/.test(authForm.email)) {
+        setAuthError("Email address is not valid.");
+        return;
+      }
+      if (authForm.password.length < 8) {
+        setAuthError("Password must be at least 8 characters.");
+        return;
+      }
+      if (authForm.password.length > 128) {
+        setAuthError("Password must be at most 128 characters.");
+        return;
+      }
+      const hasDigit = /\d/.test(authForm.password);
+      const hasSpecial = /[^a-zA-Z0-9]/.test(authForm.password);
+      if (!hasDigit && !hasSpecial) {
+        setAuthError("Password must contain at least one digit or special character.");
+        return;
+      }
+
       setAuthLoading(true);
       const path = authTab === "login" ? "/api/v1/auth/login" : "/api/v1/auth/register";
       const result = await authFetch(path, authForm, csrfToken);

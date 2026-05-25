@@ -1,10 +1,16 @@
 """app_pkg/blueprints/static_files/routes.py — Frontend SPA serving + legacy redirects."""
 
+import re
+
 from flask import Blueprint, current_app, redirect, send_from_directory
 
 from app_pkg.extensions import csrf
 
 static_bp = Blueprint("static_files", __name__)
+
+# Vite emits content-hashed filenames like "index-DgRg5HQ0.js".
+# Match an 8+ char hex hash between a dot and file extension.
+_HASHED_FILE_RE = re.compile(r"\.[a-fA-F0-9]{8,}\.")
 
 
 # ---------------------------------------------------------------------------
@@ -37,10 +43,17 @@ def legacy_analyze():
 @static_bp.route("/")
 def index():
     dist_path = current_app.static_folder or "dist"
-    return send_from_directory(dist_path, "index.html")
+    resp = send_from_directory(dist_path, "index.html")
+    resp.headers["Cache-Control"] = "no-cache"
+    return resp
 
 
 @static_bp.route("/<path:filename>")
 def serve_static(filename):
     dist_path = current_app.static_folder or "dist"
-    return send_from_directory(dist_path, filename)
+    resp = send_from_directory(dist_path, filename)
+    if _HASHED_FILE_RE.search(filename):
+        resp.headers["Cache-Control"] = "public, max-age=31536000, immutable"
+    else:
+        resp.headers["Cache-Control"] = "no-cache"
+    return resp

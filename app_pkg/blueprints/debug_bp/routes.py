@@ -41,7 +41,6 @@ def debug_gemini_status():  # noqa: C901, PLR0911, PLR0912
     endpoint = (
         "https://generativelanguage.googleapis.com/v1beta/"
         f"models/{urllib.parse.quote_plus(gemini_model)}:generateContent"
-        f"?key={urllib.parse.quote_plus(api_key)}"
     )
     payload = {"contents": [{"parts": [{"text": "Say 'test' only."}]}]}
 
@@ -49,7 +48,10 @@ def debug_gemini_status():  # noqa: C901, PLR0911, PLR0912
         req = urllib.request.Request(  # noqa: S310
             endpoint,
             data=json.dumps(payload).encode("utf-8"),
-            headers={"Content-Type": "application/json"},
+            headers={
+                "Content-Type": "application/json",
+                "X-Goog-Api-Key": api_key,
+            },
             method="POST",
         )
         with urllib.request.urlopen(req, timeout=10) as resp:  # nosec B310  # noqa: S310
@@ -64,7 +66,6 @@ def debug_gemini_status():  # noqa: C901, PLR0911, PLR0912
                         {
                             "status": "enabled",
                             "message": "Gemini API is active and responding correctly.",
-                            "api_key_prefix": f"{api_key[:8]}...",
                         }
                     ), 200
                 return jsonify(

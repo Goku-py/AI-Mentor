@@ -84,6 +84,58 @@ const aiFailureCases = [
   },
 ];
 
+test("language switch changes code and runs the new language", async ({ page }) => {
+  await page.goto("/");
+  const editor = page.locator("textarea.code-textarea");
+
+  await expect(editor).toHaveValue(/print\("Hello World!"\)/);
+
+  await page.getByLabel("Select programming language").selectOption("javascript");
+  await expect(editor).toHaveValue(/console.log\("Hello World!"\)/);
+
+  await page.route("**/api/v1/analyze", async (route) => {
+    await route.fulfill({
+      status: 200,
+      contentType: "application/json",
+      body: JSON.stringify({
+        ok: true,
+        language: "javascript",
+        issues: [],
+        execution: { stdout: "JS output\n", stderr: "", returncode: 0 },
+        ai_mentor_feedback: "",
+        ai_mentor_status: "ok",
+      }),
+    });
+  });
+
+  await page.getByRole("button", { name: "Run" }).click();
+  await expect(page.getByText("JS output")).toBeVisible();
+});
+
+test("file upload shows toast for unsupported file type", async ({ page }) => {
+  await page.goto("/");
+
+  const fileInput = page.locator("input[type=file]");
+  await fileInput.setInputFiles({
+    name: "test.rs",
+    mimeType: "text/plain",
+    buffer: Buffer.from('fn main() { println!("hi"); }'),
+  });
+
+  await expect(page.getByText("Unsupported file type: rs")).toBeVisible({ timeout: 3000 });
+});
+
+test("CSRF token failure shows actionable error message", async ({ page }) => {
+  await page.route("**/api/v1/csrf-token", async (route) => {
+    await route.abort("connectionrefused");
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "Run" }).click();
+
+  await expect(page.getByText("Session verification failed")).toBeVisible({ timeout: 5000 });
+});
+
 for (const aiCase of aiFailureCases) {
   test(`shows ${aiCase.status} AI Mentor state`, async ({ page }) => {
     await page.route("**/api/v1/analyze", async (route) => {

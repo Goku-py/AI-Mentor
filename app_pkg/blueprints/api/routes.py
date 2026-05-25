@@ -27,6 +27,7 @@ from analyzer import analyze_code, sandbox_runtime_status, verify_tools
 from app_pkg.extensions import csrf, db, limiter
 from app_pkg.observability import APP_START_TIME, APP_VERSION
 from app_pkg.security.middleware import SECURITY_METRICS, contains_abuse_pattern
+from app_pkg.utils import coerce_jwt_identity
 from models_pkg import AuditLog
 
 api_bp = Blueprint("api", __name__, url_prefix="/api/v1")
@@ -47,13 +48,6 @@ AVAILABLE_TOOLS: dict = {}
 def _refresh_tools() -> None:
     global AVAILABLE_TOOLS  # noqa: PLW0603
     AVAILABLE_TOOLS = verify_tools()
-
-
-def _coerce_jwt_identity(raw_identity: object) -> int | None:
-    try:
-        return int(raw_identity)
-    except (TypeError, ValueError):
-        return None
 
 
 def _metrics_access_allowed() -> bool:
@@ -131,8 +125,6 @@ def health():
         "available_tools": AVAILABLE_TOOLS,
         "ai_mentor_enabled": bool(os.environ.get("GEMINI_API_KEY")),
     }
-    if _metrics_access_allowed():
-        payload["metrics"] = SECURITY_METRICS
     return jsonify(payload)
 
 
@@ -209,7 +201,7 @@ def get_csrf_token():
 @api_bp.route("/history", methods=["GET", "DELETE"])
 @jwt_required()
 def history():
-    user_id = _coerce_jwt_identity(get_jwt_identity())
+    user_id = coerce_jwt_identity(get_jwt_identity())
     if user_id is None:
         return jsonify({"ok": False, "error": "Invalid authentication token."}), 401
 
@@ -236,7 +228,7 @@ def analyze():  # noqa: C901, PLR0911, PLR0912, PLR0915
     _raw_identity = get_jwt_identity()
     current_user_id = None
     if _raw_identity is not None:
-        current_user_id = _coerce_jwt_identity(_raw_identity)
+        current_user_id = coerce_jwt_identity(_raw_identity)
         if current_user_id is None:
             return jsonify({"ok": False, "error": "Invalid authentication token."}), 401
 

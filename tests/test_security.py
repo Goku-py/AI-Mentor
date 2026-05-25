@@ -169,3 +169,78 @@ class TestSecurityHeaders:
         assert has_xfo or has_csp, (
             "Neither X-Frame-Options nor CSP header found — clickjacking protection missing"
         )
+
+
+# ---------------------------------------------------------------------------
+# Debug endpoint security (Phase 1 fixes)
+# ---------------------------------------------------------------------------
+class TestDebugEndpointSecurity:
+    """Debug endpoints must not leak sensitive info and must be disabled in production."""
+
+    def test_debug_gemini_status_does_not_leak_key_prefix(self, client):
+        """The api_key_prefix field must not appear in the response."""
+        r = client.get("/api/v1/debug/gemini-status")
+        data = r.get_json()
+        assert "api_key_prefix" not in data, (
+            "api_key_prefix leaks credential info"
+        )
+
+    def test_debug_endpoints_not_registered_in_production(self, monkeypatch):
+        """When FLASK_ENV=production, debug endpoints must return 404."""
+        monkeypatch.setenv("FLASK_ENV", "production")
+        monkeypatch.setenv("SECRET_KEY", "test-secret-32-chars-min-for-prod!!")
+        monkeypatch.setenv("JWT_SECRET_KEY", "test-jwt-secret-32-chars-min-for-pro")
+        monkeypatch.setenv("ALLOWED_ORIGINS", "http://localhost:5173")
+        monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost:5432/test")
+
+        from app_pkg import create_app  # noqa: PLC0415
+        app = create_app("production")
+        with app.test_client() as c:
+            r = c.get(
+                "/api/v1/debug/gemini-status",
+                environ_overrides={"wsgi.url_scheme": "https"},
+            )
+            assert r.status_code == 404, (
+                f"Debug endpoints must be disabled in production, got {r.status_code}"
+            )
+
+
+# ---------------------------------------------------------------------------
+# Host execution fallback (controlled by HOST_EXECUTION_ENABLED env var)
+# ---------------------------------------------------------------------------
+class TestHostExecution:
+    """Host execution is enabled solely by HOST_EXECUTION_ENABLED=1."""
+
+    def test_host_execution_enabled_by_flag(self, monkeypatch):
+        """HOST_EXECUTION_ENABLED=1 must enable host execution regardless of FLASK_ENV."""
+        monkeypatch.setenv("HOST_EXECUTION_ENABLED", "1")
+
+        import importlib  # noqa: PLC0415
+
+        import analyzer  # noqa: PLC0415
+        importlib.reload(analyzer)
+
+        assert analyzer._HOST_EXECUTION_ENABLED is True  # noqa: SLF001
+
+    def test_host_execution_enabled_in_production_with_flag(self, monkeypatch):
+        """HOST_EXECUTION_ENABLED=1 must work in production too."""
+        monkeypatch.setenv("FLASK_ENV", "production")
+        monkeypatch.setenv("HOST_EXECUTION_ENABLED", "1")
+
+        import importlib  # noqa: PLC0415
+
+        import analyzer  # noqa: PLC0415
+        importlib.reload(analyzer)
+
+        assert analyzer._HOST_EXECUTION_ENABLED is True  # noqa: SLF001
+
+    def test_host_execution_disabled_without_flag(self, monkeypatch):
+        """Without HOST_EXECUTION_ENABLED=1, host execution must be disabled."""
+        monkeypatch.delenv("HOST_EXECUTION_ENABLED", raising=False)
+
+        import importlib  # noqa: PLC0415
+
+        import analyzer  # noqa: PLC0415
+        importlib.reload(analyzer)
+
+        assert analyzer._HOST_EXECUTION_ENABLED is False  # noqa: SLF001

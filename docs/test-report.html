@@ -1,0 +1,248 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>AI Code Mentor — Test Suite Report</title>
+<style>
+  *, *::before, *::after { box-sizing: border-box; margin: 0; padding: 0; }
+  body {
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Helvetica, Arial, sans-serif;
+    color: #c9d1d9; background: #0d1117; line-height: 1.6; padding: 2rem;
+  }
+  .container { max-width: 1000px; margin: 0 auto; }
+  h1 { font-size: 1.8rem; margin-bottom: 0.25rem; color: #f0f6fc; }
+  .subtitle { color: #8b949e; margin-bottom: 2rem; font-size: 0.95rem; }
+  h2 {
+    font-size: 1.3rem; margin: 2rem 0 1rem; padding-bottom: 0.4rem;
+    border-bottom: 2px solid #30363d; color: #58a6ff;
+  }
+  h3 { font-size: 1.05rem; margin: 1.25rem 0 0.5rem; color: #f0f6fc; }
+  .summary-cards { display: flex; gap: 1rem; margin-bottom: 1.5rem; flex-wrap: wrap; }
+  .card {
+    flex: 1; min-width: 140px; padding: 1rem; border-radius: 8px;
+    border: 1px solid #30363d; text-align: center;
+  }
+  .card-pass { background: #0d2818; border-color: #3fb950; }
+  .card-fail { background: #3d1114; border-color: #f85149; }
+  .card-warn { background: #3d2e00; border-color: #d29922; }
+  .card-info { background: #161b22; }
+  .card-num { font-size: 2rem; font-weight: 700; display: block; }
+  .card-label { font-size: 0.8rem; color: #8b949e; }
+  .card-pass .card-num { color: #3fb950; }
+  .card-fail .card-num { color: #f85149; }
+  .card-warn .card-num { color: #d29922; }
+  .card-info .card-num { color: #58a6ff; }
+  table {
+    width: 100%; border-collapse: collapse; margin-bottom: 1.5rem;
+    font-size: 0.85rem;
+  }
+  th, td {
+    border: 1px solid #30363d; padding: 0.4rem 0.6rem; text-align: left;
+    vertical-align: top;
+  }
+  th { background: #161b22; color: #8b949e; font-weight: 600; white-space: nowrap; }
+  td { background: #0d1117; }
+  code {
+    font-family: "SFMono-Regular", Consolas, "Liberation Mono", Menlo, monospace;
+    font-size: 0.85em; padding: 0.15em 0.3em; border-radius: 3px;
+    background: #1c2128; color: #f0f6fc;
+  }
+  .severity-critical { color: #f85149; font-weight: 700; }
+  .severity-high { color: #f85149; }
+  .severity-medium { color: #d29922; }
+  .severity-low { color: #3fb950; }
+  .severity-info { color: #58a6ff; }
+  .tag {
+    display: inline-block; padding: 0.1rem 0.4rem; border-radius: 8px;
+    font-size: 0.7rem; font-weight: 600;
+  }
+  .tag-fe { background: #3d1f3d; color: #d2a8ff; }
+  .tag-be { background: #1f3a5f; color: #58a6ff; }
+  .tag-ops { background: #1b3a2d; color: #3fb950; }
+  .tag-sec { background: #3d2e00; color: #d29922; }
+  .tag-test { background: #2f1f3d; color: #bc8cff; }
+  hr { border: none; border-top: 1px solid #30363d; margin: 1.5rem 0; }
+</style>
+</head>
+<body>
+<div class="container">
+
+<h1>AI Code Mentor — Test Suite Report</h1>
+<p class="subtitle">Generated from full test run on Python 3.14.5, Windows. Tests executed: 2026-05-25</p>
+
+<div class="summary-cards">
+  <div class="card card-pass">
+    <span class="card-num">114</span>
+    <span class="card-label">Tests Passed</span>
+  </div>
+  <div class="card card-fail">
+    <span class="card-num">0</span>
+    <span class="card-label">Tests Failed</span>
+  </div>
+  <div class="card card-warn">
+    <span class="card-num">122</span>
+    <span class="card-label">Warnings</span>
+  </div>
+  <div class="card card-info">
+    <span class="card-num">58%</span>
+    <span class="card-label">Coverage</span>
+  </div>
+</div>
+
+<div class="summary-cards">
+  <div class="card card-pass">
+    <span class="card-num">✓</span>
+    <span class="card-label">TypeScript (tsc --noEmit)</span>
+  </div>
+  <div class="card card-pass">
+    <span class="card-num">✓</span>
+    <span class="card-label">ESLint (frontend)</span>
+  </div>
+  <div class="card card-pass">
+    <span class="card-num">✓</span>
+    <span class="card-label">Ruff (Python)</span>
+  </div>
+  <div class="card card-fail">
+    <span class="card-num">0</span>
+    <span class="card-label">Frontend Tests (none exist)</span>
+  </div>
+</div>
+
+<!-- ==================== ISSUE 1 ==================== -->
+<h2>Issues Found</h2>
+
+<h3>1. <span class="severity-medium">Medium</span> — SQLite connection leak in tests (ResourceWarning)</h3>
+<table>
+  <tr><th>Tag</th><td><span class="tag tag-be">Backend</span> <span class="tag tag-ops">Ops</span></td></tr>
+  <tr><th>Detail</th><td>40+ unclosed <code>sqlite3.Connection</code> objects across test suite. Every test that creates a Flask app leaves the in-memory database connection open. Python 3.14 emits <code>ResourceWarning</code> for these.</td></tr>
+  <tr><th>Root cause</th><td><code>TestingConfig</code> uses <code>StaticPool</code> + <code>check_same_thread=False</code> but the app context teardown doesn't call <code>db.session.close()</code> or <code>db.engine.dispose()</code>.</td></tr>
+  <tr><th>Fix</th><td>Add a pytest fixture (autouse) that calls <code>db.engine.dispose()</code> after each test, or switch <code>conftest.py</code> to use <code>yield</code> with cleanup.</td></tr>
+  <tr><th>Files</th><td><code>tests/conftest.py:42-50</code>, <code>app_pkg/config.py:179-182</code></td></tr>
+</table>
+
+<h3>2. <span class="severity-medium">Medium</span> — Zero frontend unit tests</h3>
+<table>
+  <tr><th>Tag</th><td><span class="tag tag-fe">Frontend</span> <span class="tag tag-test">Test Gap</span></td></tr>
+  <tr><th>Detail</th><td>All <code>src/hooks/</code> (useCode, useAuth, useSettings), <code>src/services/api.ts</code>, and all components lack unit tests. Only E2E tests exist via Playwright.</td></tr>
+  <tr><th>Root cause</th><td>No test framework configured for frontend. No <code>vitest</code> or <code>jest</code> in <code>package.json</code>.</td></tr>
+  <tr><th>Fix</th><td>Add <code>vitest</code> + <code>@testing-library/react</code> to devDependencies. Write tests for: <code>useCode</code> (run flow, error flow, CSRF retry, abort), <code>useAuth</code> (login, refresh, logout), <code>api.ts</code> (all 7 exports with mocked <code>fetch</code>).</td></tr>
+  <tr><th>Phase</th><td>Phase 2A</td></tr>
+</table>
+
+<h3>3. <span class="severity-high">High</span> — Coverage gaps in critical paths</h3>
+<table>
+  <tr><th>Tag</th><td><span class="tag tag-sec">Security</span> <span class="tag tag-test">Test Gap</span></td></tr>
+  <tr><th>Detail</th><td>Key files with &lt; 70% coverage:</td></tr>
+  <tr><th>Files</th>
+    <td>
+      <code>analyzer.py</code>: <strong>37%</strong> — Docker sandbox, Gemini error handling, error parsers untested<br>
+      <code>app.py</code>: <strong>0%</strong> — Entry point uncovered<br>
+      <code>debug_bp/routes.py</code>: <strong>35%</strong><br>
+      <code>cli.py</code>: <strong>21%</strong><br>
+      <code>security/middleware.py</code>: <strong>67%</strong> — Rate-limit error handler, bot blocking uncovered
+    </td>
+  </tr>
+  <tr><th>Fix</th><td>Add tests for: Docker sandbox unavailable gracefully (exists), Gemini quota exhaustion & API_DISABLED paths, abuse pattern edge cases (Unicode tricks, mixed encodings), bot blocking with various User-Agents, 429 handler returns Retry-After header</td></tr>
+</table>
+
+<h3>4. <span class="severity-medium">Medium</span> — No load or concurrency tests</h3>
+<table>
+  <tr><th>Tag</th><td><span class="tag tag-test">Test Gap</span></td></tr>
+  <tr><th>Detail</th><td>No test verifies that 5th concurrent <code>/analyze</code> returns 503. No baseline performance numbers exist.</td></tr>
+  <tr><th>Fix</th><td>Add <code>TestConcurrencyLimit</code> in <code>test_api.py</code>: spawn 6 parallel requests, assert 1st-4th = 200, 5th-6th = 503 via <code>concurrent.futures</code>.</td></tr>
+  <tr><th>Phase</th><td>Phase 2B</td></tr>
+</table>
+
+<h3>5. <span class="severity-medium">Medium</span> — Python 3.14 deprecation warnings</h3>
+<table>
+  <tr><th>Tag</th><td><span class="tag tag-be">Backend</span></td></tr>
+  <tr><th>Detail</th><td><code>asyncio.get_event_loop_policy()</code> deprecated in 3.14, slated for removal in 3.16. Fires ~100 warnings from <code>pytest_asyncio.plugin</code>.</td></tr>
+  <tr><th>Fix</th><td>Upgrade <code>pytest-asyncio</code> to latest (0.25.3+). If unfixed, upgrade to <code>pytest-asyncio >= 0.26</code> which targets Python 3.14.</td></tr>
+  <tr><th>Note</th><td>CI runs Python 3.11 — not affected. Local dev environment is Python 3.14.</td></tr>
+</table>
+
+<h3>6. <span class="severity-low">Low</span> — <code>app.py</code> entry point not covered (0%)</h3>
+<table>
+  <tr><th>Tag</th><td><span class="tag tag-be">Backend</span></td></tr>
+  <tr><th>Detail</th><td><code>app.py</code> is a 16-line shim. Not covered because it runs the dev server. Acceptable — tested via E2E.</td></tr>
+  <tr><th>Fix</th><td>Acceptable as-is, mark with <code># pragma: no cover</code>.</td></tr>
+</table>
+
+<h3>7. <span class="severity-medium">Medium</span> — No migration tests in local suite</h3>
+<table>
+  <tr><th>Tag</th><td><span class="tag tag-ops">Ops</span></td></tr>
+  <tr><th>Detail</th><td>CI runs migration tests with PostgreSQL. But local <code>pytest</code> doesn't test that migrations apply cleanly. If someone changes a model, they must push to CI to find out.</td></tr>
+  <tr><th>Fix</th><td>Add <code>test_migrations.py</code> that runs <code>flask db upgrade</code> then <code>flask db downgrade</code> against in-memory SQLite.</td></tr>
+  <tr><th>Phase</th><td>Phase 2B</td></tr>
+</table>
+
+<h3>8. <span class="severity-info">Info</span> — Ruff and tsc pass cleanly</h3>
+<table>
+  <tr><th>Tag</th><td><span class="tag tag-be">Quality</span></td></tr>
+  <tr><th>Detail</th><td>Ruff reports 0 errors. TypeScript <code>tsc --noEmit</code> reports 0 errors. ESLint reports 0 errors.</td></tr>
+  <tr><th>Status</th><td>✅ Good — no action needed</td></tr>
+</table>
+
+<h3>9. <span class="severity-low">Low</span> — Coverage config allows 58% threshold with no floor</h3>
+<table>
+  <tr><th>Tag</th><td><span class="tag tag-test">Test Gap</span></td></tr>
+  <tr><th>Detail</th><td><code>pytest.ini</code> uses <code>--cov=.</code> with <code>--cov-report=term-missing</code> but no <code>--cov-fail-under=</code>. CI doesn't enforce a minimum.</td></tr>
+  <tr><th>Fix</th><td>Add <code>--cov-fail-under=60</code> immediately, increase to <code>75</code> after Phase 2B test additions.</td></tr>
+  <tr><th>Phase</th><td>Phase 2B</td></tr>
+</table>
+
+<hr>
+
+<h2>Coverage by Module</h2>
+<table>
+  <thead>
+    <tr><th>Module</th><th>Coverage</th><th>Status</th><th>Missing Critical Paths</th></tr>
+  </thead>
+  <tbody>
+    <tr><td><code>analyzer.py</code></td><td>37%</td><td><span class="severity-high">Low</span></td><td>Gemini all error states, Docker sandbox execution, C/Java/JS compilation, traceback parsers</td></tr>
+    <tr><td><code>app.py</code></td><td>0%</td><td><span class="severity-info">Acceptable</span></td><td>Entry point only, tested via E2E</td></tr>
+    <tr><td><code>app_pkg/__init__.py</code></td><td>85%</td><td><span class="severity-low">Good</span></td><td>Sentry init, CSRF exemption in dev</td></tr>
+    <tr><td><code>api/routes.py</code></td><td>75%</td><td><span class="severity-medium">OK</span></td><td><code>/metrics</code> endpoint, CSRF get token, concurrency rejection logging</td></tr>
+    <tr><td><code>auth/routes.py</code></td><td>82%</td><td><span class="severity-low">Good</span></td><td>GitHub OAuth error paths, account lockout edge cases</td></tr>
+    <tr><td><code>config.py</code></td><td>84%</td><td><span class="severity-low">Good</span></td><td>ProductionConfig.validate() — partially tested by security tests</td></tr>
+    <tr><td><code>security/middleware.py</code></td><td>67%</td><td><span class="severity-medium">OK</span></td><td>Bot blocking UA patterns, 429 handler, abuse pattern edge cases</td></tr>
+    <tr><td><code>observability.py</code></td><td>90%</td><td><span class="severity-low">Good</span></td><td>JSON logger fallback path, Werkzeug silencing</td></tr>
+    <tr><td><code>extensions.py</code></td><td>82%</td><td><span class="severity-low">Good</span></td><td>Redis client creation, JWT blacklist in-memory fallback expiry</td></tr>
+    <tr><td><code>models_pkg/user.py</code></td><td>97%</td><td><span class="severity-low">Excellent</span></td><td>—</td></tr>
+    <tr><td><code>models_pkg/audit_log.py</code></td><td>100%</td><td><span class="severity-low">Excellent</span></td><td>—</td></tr>
+  </tbody>
+</table>
+
+<hr>
+
+<h2>Tool Results</h2>
+<table>
+  <thead>
+    <tr><th>Tool</th><th>Result</th><th>Issues</th></tr>
+  </thead>
+  <tbody>
+    <tr><td>pytest (Python)</td><td><span class="severity-low">114/114 passed</span></td><td>122 warnings (resource leaks + deprecations)</td></tr>
+    <tr><td>TypeScript (tsc --noEmit)</td><td><span class="severity-low">0 errors</span></td><td>None</td></tr>
+    <tr><td>ESLint (frontend)</td><td><span class="severity-low">0 errors</span></td><td>None</td></tr>
+    <tr><td>Ruff (Python)</td><td><span class="severity-low">0 errors</span></td><td>None</td></tr>
+    <tr><td>Coverage (pytest-cov)</td><td><span class="severity-high">58% overall</span></td><td><code>analyzer.py</code> at 37% drags down total</td></tr>
+    <tr><td>Frontend unit tests</td><td><span class="severity-high">0 tests exist</span></td><td>No test framework configured for Vitest</td></tr>
+  </tbody>
+</table>
+
+<hr>
+
+<h2>Priority Remediation Actions</h2>
+<ol>
+  <li><strong>Fix SQLite connection leak</strong> in <code>conftest.py</code> — add <code>db.engine.dispose()</code> after each test. <em>(~30m)</em></li>
+  <li><strong>Add coverage floor</strong> to CI — <code>--cov-fail-under=60</code> in <code>pytest.ini</code>. <em>(~5m)</em></li>
+  <li><strong>Write concurrency limit test</strong> — verify 5th concurrent <code>/analyze</code> gets 503. <em>(~1h)</em></li>
+  <li><strong>Configure Vitest</strong> for frontend unit tests — add to <code>package.json</code>, verify <code>npm run test</code> works. <em>(~1h)</em></li>
+  <li><strong>Add migration idempotency test</strong> — verify <code>flask db upgrade</code> + <code>downgrade</code> against SQLite. <em>(~1h)</em></li>
+  <li><strong>Raise coverage target to 75%</strong> after adding tests for: Gemini error paths, concurrency, bot blocking, 429 handler. <em>(~2-3d)</em></li>
+</ol>
+
+</div>
+</body>
+</html>

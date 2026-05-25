@@ -27,6 +27,8 @@ class User(db.Model):
         nullable=False,
     )
     is_active = db.Column(db.Boolean, default=True, nullable=False)
+    login_attempts = db.Column(db.Integer, default=0, nullable=False)
+    locked_until = db.Column(db.DateTime(timezone=True), nullable=True)
 
     audit_logs = db.relationship("AuditLog", backref="user", lazy="dynamic")
 
@@ -37,6 +39,20 @@ class User(db.Model):
         if not self.password_hash:
             return False
         return check_password_hash(self.password_hash, password)
+
+    def is_locked(self) -> bool:
+        if self.locked_until is None:
+            return False
+        if self.locked_until.tzinfo is None:
+            self.locked_until = self.locked_until.replace(tzinfo=UTC)
+        return datetime.now(UTC) < self.locked_until
+
+    def increment_login_attempts(self) -> None:
+        self.login_attempts = (self.login_attempts or 0) + 1
+
+    def reset_login_attempts(self) -> None:
+        self.login_attempts = 0
+        self.locked_until = None
 
     def to_dict(self) -> dict:
         return {

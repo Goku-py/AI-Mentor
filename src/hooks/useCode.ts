@@ -8,6 +8,7 @@ import type {
 } from "../types";
 import { DEFAULT_CODE, EXTENSION_MAP, SUPPORTED_LANGUAGES } from "../types";
 import { analyzeCode, fetchCsrfToken } from "../services/api";
+import { showToast } from "../components/Toast";
 
 const inferAiMentorStatus = (feedback: string): AiMentorStatus => {
   if (feedback === "AI_MENTOR_DISABLED") return "disabled";
@@ -151,7 +152,21 @@ export function useCode(options: UseCodeOptions): UseCodeReturn {
     try {
       let token = csrfToken;
       if (!token) {
-        token = await fetchCsrfToken(controller.signal);
+        for (let attempt = 0; attempt < 3; attempt++) {
+          try {
+            token = await fetchCsrfToken(controller.signal);
+            if (token) break;
+          } catch {
+            token = "";
+          }
+          if (attempt < 2) await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
+        }
+        if (!token) {
+          setErrorMsg("Session verification failed. Please refresh the page.");
+          setMentorFeedback("");
+          setIsAnalyzing(false);
+          return;
+        }
       }
       let response = await analyzeCode(code, language, accessToken, token, controller.signal);
 
@@ -257,7 +272,7 @@ export function useCode(options: UseCodeOptions): UseCodeReturn {
       try { await navigator.share({ text }); } catch { /* user cancelled */ }
     } else {
       await navigator.clipboard.writeText(text);
-      alert("Code copied to clipboard");
+      showToast("Code copied to clipboard");
     }
   }, [code, language]);
 
@@ -266,14 +281,14 @@ export function useCode(options: UseCodeOptions): UseCodeReturn {
     if (!file) return;
 
     if (file.size > MAX_FILE_SIZE) {
-      alert("File too large. Maximum size is 1MB.");
+      showToast("File too large. Maximum size is 1MB.");
       return;
     }
 
     const ext = file.name.split(".").pop()?.toLowerCase() || "";
     const detectedLang = EXTENSION_MAP[ext];
     if (!detectedLang) {
-      alert("Unsupported file type: " + ext);
+      showToast("Unsupported file type: " + ext);
       return;
     }
     const reader = new FileReader();
