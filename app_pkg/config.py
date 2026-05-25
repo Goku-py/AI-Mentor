@@ -186,7 +186,34 @@ class ProductionConfig(BaseConfig):
                 )
                 raise RuntimeError(msg)
 
+        cls._check_storage_uris()
         cls._warn_redis_config()
+
+    @classmethod
+    def _check_storage_uris(cls):
+        _rate_uri = (os.environ.get("RATE_LIMIT_STORAGE_URI") or "").strip()
+        _blacklist_uri = (os.environ.get("JWT_BLACKLIST_STORAGE_URI") or "").strip()
+        _checks = [
+            ("RATE_LIMIT_STORAGE_URI", _rate_uri),
+            ("JWT_BLACKLIST_STORAGE_URI", _blacklist_uri),
+        ]
+        for name, uri in _checks:
+            if not uri:
+                continue
+            if "${{" in uri:
+                msg = (
+                    f"CRITICAL ERROR: {name} has unresolved Railway ref ({uri}). "
+                    "Provision Redis (New → Database → Redis) or "
+                    f"set {name}=memory:// for in-memory storage."
+                )
+                raise RuntimeError(msg)
+            if uri.startswith("/"):
+                msg = (
+                    f"CRITICAL ERROR: {name} starts with '/' ({uri}). "
+                    "Unresolved Railway ${{Redis.REDIS_URL}} — Redis plugin not linked. "
+                    "Provision Redis or set to memory://."
+                )
+                raise RuntimeError(msg)
 
     @classmethod
     def _warn_redis_config(cls):
@@ -195,10 +222,9 @@ class ProductionConfig(BaseConfig):
         _rate_limit_uri = (os.environ.get("RATE_LIMIT_STORAGE_URI") or "memory://").strip()
         if "memory" in _rate_limit_uri:
             current_app.logger.warning(
-                "RATE_LIMIT_STORAGE_URI is set to in-memory storage in Production. "
-                "Each Gunicorn worker tracks rate limits independently, making limits "
-                "per-worker instead of global. Add a Redis plugin in Railway dashboard "
-                "and set RATE_LIMIT_STORAGE_URI to a Redis URL."
+                "RATE_LIMIT_STORAGE_URI is memory:// in Production. "
+                "4 workers x 10 req/min = 40 req/min effective limit. "
+                "Add Redis plugin and set RATE_LIMIT_STORAGE_URI to a Redis URL."
             )
 
         _blacklist_enabled = os.environ.get("JWT_BLACKLIST_ENABLED", "0").strip()
