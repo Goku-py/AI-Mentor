@@ -180,14 +180,6 @@ def _sandbox_unavailable_execution(message: str, explanation: str) -> dict[str, 
 
 
 def _host_execution_allowed() -> bool:
-    """Return True if host execution fallback is permitted.
-
-    Forced False in production to prevent untrusted code from running
-    directly on the host (sandbox-only in prod).
-    """
-    env = (os.environ.get("FLASK_ENV") or os.environ.get("APP_ENV") or "").strip().lower()
-    if env in {"prod", "production"}:
-        return False
     return os.environ.get("HOST_EXECUTION_ENABLED", "").strip() == "1"
 
 

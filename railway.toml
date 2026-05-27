@@ -1,9 +1,9 @@
 [build]
-builder = "NIXPACKS"
-buildCommand = "npm ci && npm run build"
+builder = "DOCKERFILE"
 
-[deploy]
-startCommand = "sh -c 'gunicorn --bind 0.0.0.0:$PORT -w 4 --timeout 30 app:app'"
+# No startCommand needed — the Dockerfile's CMD (gunicorn) handles it.
+# Railway builds the image using the Dockerfile at the repo root, then
+# runs the container with the Dockerfile's CMD.
 
 # PostgreSQL service (provision via Railway dashboard → "New" → "Database" → "PostgreSQL")
 # The DATABASE_URL env var will be auto-injected into the app service.
@@ -19,6 +19,7 @@ startCommand = "sh -c 'gunicorn --bind 0.0.0.0:$PORT -w 4 --timeout 30 app:app'"
 #   GEMINI_API_KEY                 — from https://aistudio.google.com/app/apikey
 #   ALLOWED_ORIGINS                — exact frontend URL, e.g. https://your-app.railway.app
 #   FLASK_ENV=production
+#   HOST_EXECUTION_ENABLED=1       — enable subprocess sandbox (REQUIRED: Docker is unavailable on Railway)
 #
 #   ⚠ DO NOT SET FLASK_DEBUG — it overrides DEBUG=False per Flask framework.
 #     If FLASK_DEBUG is set to any truthy value, ProductionConfig.validate()
@@ -45,7 +46,6 @@ startCommand = "sh -c 'gunicorn --bind 0.0.0.0:$PORT -w 4 --timeout 30 app:app'"
 # ================================================================
 #
 #   GEMINI_MODEL                   — default gemini-2.5-flash; override to test newer models
-#   HOST_EXECUTION_ENABLED=1       — enable subprocess sandbox (required when Docker is unavailable)
 #   ANALYZE_API_KEY                — shared secret for /analyze endpoint (prevents anonymous access)
 #   LOG_LEVEL=INFO                 — Python logging level
 # ================================================================
