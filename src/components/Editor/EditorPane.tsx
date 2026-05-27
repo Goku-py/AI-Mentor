@@ -3,6 +3,15 @@ import Prism from "prismjs";
 import Editor from "react-simple-code-editor";
 import { CodeIcon } from "../Icons";
 
+function escapeHtml(unsafe: string): string {
+  return unsafe
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;")
+    .replace(/'/g, "&#039;");
+}
+
 interface EditorPaneProps {
   code: string;
   language: string;
@@ -44,7 +53,7 @@ export default function EditorPane({
         className="editor-container"
       >
         <div className="line-numbers" aria-hidden="true" style={{ fontSize: fontSize + "px", minHeight: "100%" }}>
-          {code.split("\n").map((_, i) => (
+          {code.replace(/\n+$/, "").split("\n").map((_, i) => (
             <div key={i} style={{ height: "1.6em" }}>{i + 1}</div>
           ))}
         </div>
@@ -69,7 +78,9 @@ export default function EditorPane({
                   : language === "javascript"
                     ? Prism.languages.javascript
                     : Prism.languages.python;
-              const highlighted = grammar ? Prism.highlight(codeToHighlight, grammar, language) : codeToHighlight;
+              const highlighted = grammar
+                ? Prism.highlight(codeToHighlight, grammar, language)
+                : escapeHtml(codeToHighlight);
               return highlighted
                 .split("\n")
                 .map((line, idx) => `<span class="${errorLine === idx + 1 ? "error-line" : ""}">${line || " "}</span>`)

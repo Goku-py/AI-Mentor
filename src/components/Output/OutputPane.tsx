@@ -72,7 +72,7 @@ export default function OutputPane({
           <div className="placeholder-text">Outputs and issues will appear here when you run code.</div>
         )}
 
-        {issues.length > 0 && (
+        {issues.filter((i) => i.severity === "error").length > 0 && (
           <div
             style={{
               marginBottom: (output || errorMsg) ? "1rem" : 0,
@@ -80,10 +80,27 @@ export default function OutputPane({
               paddingBottom: (output || errorMsg) ? "0.5rem" : 0,
             }}
           >
-            <div style={{ fontWeight: 600, marginBottom: "0.5rem", color: "var(--text-secondary)" }}>Compiled Analysis Issues:</div>
-            {issues.map((i: Issue, idx: number) => (
-              <div key={idx} style={{ color: i.severity === "error" ? "var(--error)" : "var(--warning)", fontSize: "0.9em", marginBottom: "0.2rem" }}>
-                [Line {i.line}] {i.severity.toUpperCase()}: {i.message}
+            <div style={{ fontWeight: 600, marginBottom: "0.5rem", color: "#ff7b72" }}>Errors:</div>
+            {issues.filter((i) => i.severity === "error").map((i: Issue, idx: number) => (
+              <div key={idx} style={{ color: "#ff7b72", fontSize: "0.9em", marginBottom: "0.2rem" }}>
+                [Line {i.line}] {i.message}
+              </div>
+            ))}
+          </div>
+        )}
+
+        {issues.filter((i) => i.severity !== "error").length > 0 && (
+          <div
+            style={{
+              marginBottom: (output || errorMsg) ? "1rem" : 0,
+              borderBottom: (output || errorMsg) ? "1px solid var(--border-color)" : "none",
+              paddingBottom: (output || errorMsg) ? "0.5rem" : 0,
+            }}
+          >
+            <div style={{ fontWeight: 600, marginBottom: "0.5rem", color: "var(--text-secondary)" }}>Warnings & Suggestions:</div>
+            {issues.filter((i) => i.severity !== "error").map((i: Issue, idx: number) => (
+              <div key={idx} style={{ color: "var(--warning)", fontSize: "0.9em", marginBottom: "0.2rem" }}>
+                [Line {i.line}] {i.message}
               </div>
             ))}
           </div>

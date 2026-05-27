@@ -210,6 +210,7 @@ body {
   flex: 1;
   overflow: auto !important;
   align-items: stretch;
+  white-space: pre;
 }
 
 .editor-container::-webkit-scrollbar {
@@ -243,7 +244,6 @@ body {
   text-align: right;
   color: var(--text-secondary);
   font-family: var(--font-mono);
-  font-size: 15px;
   line-height: 1.6;
   user-select: none;
   background-color: #0d1117;

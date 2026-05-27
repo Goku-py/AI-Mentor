@@ -132,10 +132,10 @@ def _limit_resources_linux() -> None:
 
     _os.nice(19)
     _os.setpgrp()
-    memory_limit = 64 * 1024 * 1024
+    memory_limit = 256 * 1024 * 1024
     resource.setrlimit(resource.RLIMIT_AS, (memory_limit, memory_limit))
     resource.setrlimit(resource.RLIMIT_CPU, (3, 3))
-    resource.setrlimit(resource.RLIMIT_NPROC, (64, 64))
+    resource.setrlimit(resource.RLIMIT_NPROC, (256, 256))
 
 
 def sandbox_runtime_status() -> dict[str, Any]:
@@ -179,9 +179,16 @@ def _sandbox_unavailable_execution(message: str, explanation: str) -> dict[str, 
     return execution
 
 
-_HOST_EXECUTION_ENABLED: bool = (
-    os.environ.get("HOST_EXECUTION_ENABLED", "").strip() == "1"
-)
+def _host_execution_allowed() -> bool:
+    """Return True if host execution fallback is permitted.
+
+    Forced False in production to prevent untrusted code from running
+    directly on the host (sandbox-only in prod).
+    """
+    env = (os.environ.get("FLASK_ENV") or os.environ.get("APP_ENV") or "").strip().lower()
+    if env in {"prod", "production"}:
+        return False
+    return os.environ.get("HOST_EXECUTION_ENABLED", "").strip() == "1"
 
 
 def _run_host_sandboxed(
@@ -305,7 +312,7 @@ def run_in_sandbox(  # noqa: C901, PLR0911, PLR0912, PLR0915
                 f.write(code)
 
             if docker is None:
-                if _HOST_EXECUTION_ENABLED:
+                if _host_execution_allowed():
                     host_cmd = _format_host_cmd(cmd, source_path, tmp_dir, main_class)
                     return _run_host_sandboxed(host_cmd, timeout_seconds, tmp_dir)
                 execution = _sandbox_unavailable_execution(
@@ -318,7 +325,7 @@ def run_in_sandbox(  # noqa: C901, PLR0911, PLR0912, PLR0915
             try:
                 client = docker.from_env()
             except Exception as docker_err:  # noqa: BLE001
-                if _HOST_EXECUTION_ENABLED:
+                if _host_execution_allowed():
                     host_cmd = _format_host_cmd(cmd, source_path, tmp_dir, main_class)
                     return _run_host_sandboxed(host_cmd, timeout_seconds, tmp_dir)
                 execution = _sandbox_unavailable_execution(
@@ -335,7 +342,7 @@ def run_in_sandbox(  # noqa: C901, PLR0911, PLR0912, PLR0915
                     working_dir="/workspace",
                     volumes={tmp_dir: {"bind": "/workspace", "mode": "ro"}},
                     network_disabled=True,
-                    mem_limit="64m",
+                    mem_limit="256m",
                     cpu_quota=50000,
                     read_only=True,
                     user="65534:65534",
@@ -346,7 +353,7 @@ def run_in_sandbox(  # noqa: C901, PLR0911, PLR0912, PLR0915
                     stdout=True,
                     stderr=True,
                     detach=True,
-                    tmpfs={"/tmp": "rw,nosuid,size=64m"},  # noqa: S108
+                    tmpfs={"/tmp": "rw,nosuid,size=128m"},  # noqa: S108
                 )
                 try:
                     deadline = time.monotonic() + timeout_seconds
@@ -1317,13 +1324,59 @@ def _ai_mentor_status_from_feedback(feedback: str) -> str:
 
 
 MAX_GLOBAL_AI_CALLS_PER_DAY = int(os.environ.get("MAX_GLOBAL_AI_CALLS_PER_DAY", "5000"))
-MAX_AI_CODE_CHARS = 4000
+
+_AI_QUOTA_REDIS_PREFIX = "ai_quota:"
+
+
+def _ai_quota_redis_key() -> str:
+    return f"{_AI_QUOTA_REDIS_PREFIX}{time.strftime('%Y-%m-%d')}"
+
+
+def _check_ai_quota() -> bool:
+    """Return True if the global daily AI quota has been reached."""
+    client = None
+    try:
+        from app_pkg.extensions import get_redis_client  # noqa: PLC0415
+        client = get_redis_client()
+    except ImportError:
+        client = None
+
+    if client is not None:
+        key = _ai_quota_redis_key()
+        value = client.get(key)
+        return value is not None and int(value) >= MAX_GLOBAL_AI_CALLS_PER_DAY
+
+    return SECURITY_METRICS.get("ai_mentor_calls_made", 0) >= MAX_GLOBAL_AI_CALLS_PER_DAY
+
+
+def _increment_ai_quota() -> None:
+    """Increment the daily AI call counter. Uses Redis when available."""
+    client = None
+    try:
+        from app_pkg.extensions import get_redis_client  # noqa: PLC0415
+        client = get_redis_client()
+    except ImportError:
+        client = None
+
+    if client is not None:
+        key = _ai_quota_redis_key()
+        pipe = client.pipeline()
+        pipe.incr(key)
+        pipe.expire(key, 86400)
+        pipe.execute()
+    else:
+        SECURITY_METRICS["ai_mentor_calls_made"] = (
+            SECURITY_METRICS.get("ai_mentor_calls_made", 0) + 1
+        )
+
 
 _AI_MENTOR_CACHE: OrderedDict = OrderedDict()
 _AI_MENTOR_CACHE_SIZE = 500
 
 _logger = logging.getLogger("app_pkg")
 
+
+MAX_AI_CODE_CHARS = 10000
 
 _MENTOR_PROMPTS: dict[str, str] = {
     "beginner": (
@@ -1335,7 +1388,9 @@ _MENTOR_PROMPTS: dict[str, str] = {
         "- Explain what is wrong in simple terms.\n"
         "- Give a HINT toward the exact line or concept that needs fixing.\n"
         "- Do NOT give the corrected code.\n"
-        "- Be VERY BRIEF — max 3 sentences per error.\n\n"
+        "- Be VERY BRIEF — max 3 sentences per error.\n"
+        "- Focus ONLY on errors that prevent the code from running."
+        " Do NOT comment on style issues (line length, indentation, trailing whitespace, TODO comments).\n\n"  # noqa: E501
         "Detected issues:\n{error_context}\n\n"
         "Student code ({language}) with line numbers:\n"
         "```\n{numbered_lines}\n```"
@@ -1349,7 +1404,9 @@ _MENTOR_PROMPTS: dict[str, str] = {
         "- Help the student understand the underlying concept that needs to be applied.\n"
         "- Give a hint that guides without referencing specific lines.\n"
         "- Do NOT give the corrected code.\n"
-        "- Be BRIEF and focused on conceptual understanding.\n\n"
+        "- Be BRIEF and focused on conceptual understanding.\n"
+        "- Focus ONLY on errors that prevent the code from running."
+        " Do NOT comment on style issues (line length, indentation, trailing whitespace, TODO comments).\n\n"  # noqa: E501
         "Detected issues:\n{error_context}\n\n"
         "Student code ({language}) with line numbers:\n"
         "```\n{numbered_lines}\n```"
@@ -1362,7 +1419,9 @@ _MENTOR_PROMPTS: dict[str, str] = {
         "- Do NOT provide line references, code quotes, or detailed explanations.\n"
         "- Be VERY TERSE — list only the concept names or brief concept descriptions.\n"
         "- Do NOT explain or give hints.\n"
-        "- Do NOT reference specific code.\n\n"
+        "- Do NOT reference specific code.\n"
+        "- Focus ONLY on errors that prevent the code from running."
+        " Do NOT comment on style issues (line length, indentation, trailing whitespace, TODO comments).\n\n"  # noqa: E501
         "Detected issues:\n{error_context}\n\n"
         "Student code ({language}) with line numbers:\n"
         "```\n{numbered_lines}\n```"
@@ -1379,12 +1438,20 @@ def _build_mentor_prompt(code: str, language: str, difficulty: str, error_contex
     return tmpl.format(error_context=error_context, numbered_lines=numbered, language=language)
 
 
+_STYLE_ISSUE_CODES: set[str] = {
+    "LONG_LINE",
+    "TODO_COMMENT",
+    "TRAILING_WHITESPACE",
+    "TABS_INDENT",
+}
+
+
 def _build_error_context(execution: dict, issues: list[dict]) -> tuple[str, list[dict]]:
     ctx = ""
     all_errors: list[dict] = []
 
     for iss in issues:
-        if iss.get("severity") == "error":
+        if iss.get("severity") == "error" and iss.get("code") not in _STYLE_ISSUE_CODES:
             all_errors.append(
                 {
                     "line": iss.get("line"),
@@ -1411,7 +1478,7 @@ def _build_error_context(execution: dict, issues: list[dict]) -> tuple[str, list
 
     if not all_errors:
         for warn in issues:
-            if warn.get("severity") == "warning":
+            if warn.get("severity") == "warning" and warn.get("code") not in _STYLE_ISSUE_CODES:
                 ctx += f"Line {warn.get('line')}: {warn.get('message')}\n"
 
     return ctx, all_errors
@@ -1424,7 +1491,7 @@ async def _get_ai_mentorship(  # noqa: C901, PLR0911, PLR0912, PLR0915
     issues: list[dict],
     difficulty: str = "beginner",
 ) -> str:
-    if SECURITY_METRICS.get("ai_mentor_calls_made", 0) >= MAX_GLOBAL_AI_CALLS_PER_DAY:
+    if _check_ai_quota():
         return "AI_MENTOR_QUOTA_EXCEEDED"
 
     api_key = _get_valid_gemini_api_key()
@@ -1461,9 +1528,7 @@ async def _get_ai_mentorship(  # noqa: C901, PLR0911, PLR0912, PLR0915
                 ],
             }
 
-            SECURITY_METRICS["ai_mentor_calls_made"] = (
-                SECURITY_METRICS.get("ai_mentor_calls_made", 0) + 1
-            )
+            _increment_ai_quota()
 
             _max_retries = 3
             async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
@@ -1526,9 +1591,11 @@ async def _get_ai_mentorship(  # noqa: C901, PLR0911, PLR0912, PLR0915
                 return feedback_text
 
             return "AI_MENTOR_BAD_RESPONSE"
-    except Exception:
-        _logger.exception("Gemini error with AI Mentor")
-        return "AI_MENTOR_DISABLED"
+    except Exception as exc:
+        _logger.exception(
+            "Unexpected Gemini error type=%s", type(exc).__name__
+        )
+        return "AI_MENTOR_API_ERROR"
     return "LOOKS_GOOD"
 
 
