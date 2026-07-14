@@ -19,8 +19,7 @@ builder = "DOCKERFILE"
 #   GEMINI_API_KEY                 — from https://aistudio.google.com/app/apikey
 #   ALLOWED_ORIGINS                — exact frontend URL, e.g. https://your-app.railway.app
 #   FLASK_ENV=production
-#   HOST_EXECUTION_ENABLED=1       — enable subprocess sandbox (REQUIRED: Docker is unavailable on Railway)
-#
+#   Code execution requires Docker daemon access on the host.
 #   ⚠ DO NOT SET FLASK_DEBUG — it overrides DEBUG=False per Flask framework.
 #     If FLASK_DEBUG is set to any truthy value, ProductionConfig.validate()
 #     will raise RuntimeError and the app will not start.

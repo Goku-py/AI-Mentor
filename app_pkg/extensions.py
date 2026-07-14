@@ -66,7 +66,7 @@ def jwt_blacklist_add(jti: str, expires_at: float | None = None) -> None:
     Uses Redis when JWT_BLACKLIST_STORAGE_URI=redis://...,
     otherwise falls back to an in-memory dict (process-local only).
     """
-    ttl = 900 if expires_at is None else max(0, int(expires_at - time.time()))
+    ttl = 900 if expires_at is None else max(1, int(expires_at - time.time()))
     client = get_redis_client()
     if client is not None:
         client.setex(f"jwt_blacklist:{jti}", ttl, "1")

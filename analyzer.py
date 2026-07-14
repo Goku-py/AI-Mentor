@@ -180,7 +180,13 @@ def _sandbox_unavailable_execution(message: str, explanation: str) -> dict[str, 
 
 
 def _host_execution_allowed() -> bool:
-    return os.environ.get("HOST_EXECUTION_ENABLED", "").strip() == "1"
+    """Always False — untrusted code must never execute on the host OS.
+
+    Previously controlled by HOST_EXECUTION_ENABLED=1 for local dev.
+    Removed because the regex abuse-pattern check is trivially bypassable.
+    Use Docker for all code execution, even in development.
+    """
+    return False
 
 
 def _run_host_sandboxed(

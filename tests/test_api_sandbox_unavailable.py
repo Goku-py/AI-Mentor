@@ -7,7 +7,6 @@ def test_analyze_sandbox_unavailable(client, monkeypatch):
     """
     # Simulate Docker SDK not installed
     monkeypatch.setattr(analyzer, "docker", None)
-    monkeypatch.setattr(analyzer, "_HOST_EXECUTION_ENABLED", False)
 
     resp = client.post(
         "/api/v1/analyze",

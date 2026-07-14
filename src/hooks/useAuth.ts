@@ -9,6 +9,9 @@ import {
   sessionRestore,
 } from "../services/api";
 
+// ponytail: mutex so concurrent 401s share one in-flight refresh call.
+let _refreshPromise: Promise<string | null> | null = null;
+
 export interface UseAuthReturn {
   user: User | null;
   accessToken: string | null;
@@ -59,9 +62,18 @@ export function useAuth(): UseAuthReturn {
   }, []);
 
   const tryRefreshToken = useCallback(async (): Promise<string | null> => {
-    const token = await apiTryRefresh();
-    if (token) setAccessToken(token);
-    return token;
+    if (_refreshPromise) return _refreshPromise;
+    _refreshPromise = apiTryRefresh()
+      .then((token) => {
+        if (token) setAccessToken(token);
+        _refreshPromise = null;
+        return token;
+      })
+      .catch(() => {
+        _refreshPromise = null;
+        return null;
+      });
+    return _refreshPromise;
   }, []);
 
   const handleUnauthenticated = useCallback(() => {

@@ -83,3 +83,6 @@ out.txt
 
 # Security audit reports (generated, not source)
 AUDIT_REPORT_*.md
+
+# Deepwork session state (persistent between prompts, never committed)
+.slim/deepwork/

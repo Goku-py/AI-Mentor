@@ -49,7 +49,6 @@ class TestToolVerification:
     def test_sandbox_unavailable_returns_safe_error(self, monkeypatch):
         """Missing Docker should fail closed with SandboxUnavailable."""
         monkeypatch.setattr(analyzer, "docker", None)
-        monkeypatch.setattr(analyzer, "_HOST_EXECUTION_ENABLED", False)
         run_in_sandbox(
             "print('x')",
             "python",

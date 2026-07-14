@@ -200,6 +200,12 @@ def refresh():
     user = db.session.get(User, user_id)
     if not user or not user.is_active:
         return jsonify({"ok": False, "error": "User not found or inactive."}), 404
+    # Blacklist the old refresh token so it cannot be reused after rotation.
+    old_jwt = get_jwt()
+    old_jti = old_jwt.get("jti", "")
+    old_exp = old_jwt.get("exp", None)
+    if old_jti:
+        jwt_blacklist_add(old_jti, expires_at=old_exp)
     access_token, refresh_token = _make_tokens(user)
     response = make_response(jsonify({"ok": True, "access_token": access_token}), 200)
     set_refresh_cookies(response, refresh_token)
