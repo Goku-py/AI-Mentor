@@ -1,15 +1,24 @@
-# Environment Variables
+# --- Environment / Secrets ---
 .env
+.env.*
+!.env.example
 .env.local
 .env.*.local
+*.pem
+*.key
+secrets/
+credentials/
+google-credentials.json
+service-account*.json
 
-# Python
+# --- Python ---
 __pycache__/
 *.py[cod]
 *$py.class
 *.so
 *.egg
 *.egg-info/
+.eggs/
 dist/
 build/
 .Python
@@ -17,29 +26,69 @@ venv/
 ENV/
 env/
 .venv
+.pipenv/
+Pipfile.lock
+poetry.lock
 pip-log.txt
 pip-delete-this-directory.txt
 
-# Flask
-instance/
-.webassets-cache
-
-# Testing
+# --- Python tooling ---
+.mypy_cache/
+.pytype/
+.dmypy.json
+.hypothesis/
+.nox/
+.tox/
+.ruff_cache/
 .pytest_cache/
 .coverage
+coverage/
 htmlcov/
-.tox/
 *,cover
-testsprite_tests/
+.mutmut-cache/
+
+# --- Flask / Databases ---
+instance/
+.webassets-cache
+flask_session/
+*.db
+*.sqlite
+*.sqlite3
+
+# --- Node / Vite / React ---
+node_modules/
+dist/
+.vite/
+.cache/
+*.tsbuildinfo
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.npm
+.pnpm-store/
+.eslintcache
+.stylelintcache
+out/
+
+# --- Testing ---
 test-results/
+testsprite_tests/
+playwright-report/
+playwright/.cache/
 
-# TestSprite MCP (local config may contain credentials)
-.cursor/mcp.json
-testsprite_tests/tmp/
-testsprite_tests/**/__pycache__/
-testsprite_tests/**/*.pyc
+# --- Redis / Caches ---
+dump.rdb
+*.rdb
+.redis/
 
-# IDE
+# --- Docker ---
+.docker/
+docker-compose.override.yml
+.env.docker
+*.tar
+
+# --- IDE / Editors ---
 .vscode/
 .idea/
 *.swp
@@ -48,26 +97,32 @@ testsprite_tests/**/*.pyc
 .DS_Store
 *.sublime-project
 *.sublime-workspace
+*.code-workspace
+.atom/
+.cursor/
+.claude/
+.trae/
+.opencode/
+.cursorrules
+opencode.json
 
-# Node.js
-node_modules/
-npm-debug.log*
-yarn-debug.log*
-yarn-error.log*
-.npm
-
-# OS
+# --- OS ---
 Thumbs.db
+ehthumbs.db
+Desktop.ini
+desktop.ini
 .directory
 
-# Logs
+# --- Logs ---
 logs/
 *.log
+flask_*.log
+vite_*.log
 
-# Local tooling caches
+# --- Local tooling / graphs ---
 .code-review-graph/
 
-# Large debug / security scan output files (never commit these)
+# --- Generated reports ---
 bandit_output.json
 bandit_verification.json
 flake8_output.txt
@@ -75,17 +130,15 @@ flake8_verification.txt
 js_out.txt
 ts_output.txt
 out.txt
-.ruff_cache/
-
-# Local tooling config (never commit personal settings)
-.claude/
-.trae/
-
-# Security audit reports (generated, not source)
 AUDIT_REPORT_*.md
 
-testsprite_tests\tmp\config.json
+# --- Temp / Backups ---
+tmp/
+temp/
+*.tmp
+*.bak
+*.orig
 
-# Project docs (PRD, API docs)
+# --- Docs (binary/generated) ---
 AI-Mentor-PRD.pdf
 api_docs.md
