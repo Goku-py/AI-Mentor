@@ -212,7 +212,7 @@ class TestHostExecution:
     """Host execution is enabled solely by HOST_EXECUTION_ENABLED=1."""
 
     def test_host_execution_enabled_by_flag(self, monkeypatch):
-        """HOST_EXECUTION_ENABLED=1 enables host execution outside production."""
+        """HOST_EXECUTION_ENABLED=1 enables host execution."""
         monkeypatch.setenv("HOST_EXECUTION_ENABLED", "1")
 
         import importlib  # noqa: PLC0415
@@ -220,7 +220,7 @@ class TestHostExecution:
         import analyzer  # noqa: PLC0415
         importlib.reload(analyzer)
 
-        assert analyzer._host_execution_allowed() is False  # noqa: SLF001
+        assert analyzer._host_execution_allowed() is True  # noqa: SLF001
 
     def test_host_execution_enabled_in_production_with_flag(self, monkeypatch):
         """HOST_EXECUTION_ENABLED=1 enables host execution even in production."""
@@ -232,7 +232,7 @@ class TestHostExecution:
         import analyzer  # noqa: PLC0415
         importlib.reload(analyzer)
 
-        assert analyzer._host_execution_allowed() is False  # noqa: SLF001
+        assert analyzer._host_execution_allowed() is True  # noqa: SLF001
 
     def test_host_execution_disabled_without_flag(self, monkeypatch):
         """Without HOST_EXECUTION_ENABLED=1, host execution must be disabled."""

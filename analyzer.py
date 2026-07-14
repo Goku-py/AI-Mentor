@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import signal
 import subprocess  # nosec B404
 import sys
 import tempfile
@@ -105,25 +106,6 @@ def _empty_execution() -> dict[str, Any]:
     }
 
 
-def _sandbox_env() -> dict[str, str]:
-    env = os.environ.copy()
-    # Best-effort network disabling through subprocess environment overrides.
-    env.update(
-        {
-            "NO_NETWORK": "1",
-            "http_proxy": "",
-            "https_proxy": "",
-            "HTTP_PROXY": "",
-            "HTTPS_PROXY": "",
-            "all_proxy": "",
-            "ALL_PROXY": "",
-            "no_proxy": "*",
-            "NO_PROXY": "*",
-        },
-    )
-    return env
-
-
 def _limit_resources_linux() -> None:
     if not sys.platform.startswith("linux"):
         return
@@ -136,6 +118,7 @@ def _limit_resources_linux() -> None:
     resource.setrlimit(resource.RLIMIT_AS, (memory_limit, memory_limit))
     resource.setrlimit(resource.RLIMIT_CPU, (3, 3))
     resource.setrlimit(resource.RLIMIT_NPROC, (256, 256))
+    resource.setrlimit(resource.RLIMIT_FSIZE, (10 * 1024 * 1024, 10 * 1024 * 1024))
 
 
 def sandbox_runtime_status() -> dict[str, Any]:
@@ -180,13 +163,18 @@ def _sandbox_unavailable_execution(message: str, explanation: str) -> dict[str, 
 
 
 def _host_execution_allowed() -> bool:
-    """Always False — untrusted code must never execute on the host OS.
+    """True when HOST_EXECUTION_ENABLED=1 env var is set.
 
-    Previously controlled by HOST_EXECUTION_ENABLED=1 for local dev.
-    Removed because the regex abuse-pattern check is trivially bypassable.
-    Use Docker for all code execution, even in development.
+    Runs code natively (no Docker) — acceptable for authenticated users
+    in an educational tool when Docker is unavailable.  See
+    _run_host_sandboxed for the env, resource, and fd hardening applied.
+
+    Host execution does NOT provide network isolation — the child can
+    open sockets despite the cleared proxy vars (defense-in-depth only).
+    Accepted risk: authenticated users, Railway egress restrictions limit
+    blast radius.
     """
-    return False
+    return os.environ.get("HOST_EXECUTION_ENABLED", "").strip() == "1"
 
 
 def _run_host_sandboxed(
@@ -194,40 +182,85 @@ def _run_host_sandboxed(
     timeout: int,
     cwd: str | None = None,
 ) -> dict[str, Any]:
+    """Run code natively with resource limits and env isolation.
+
+    Fallback when Docker is unavailable.  The child process gets:
+    * A minimal environment (no secrets from the parent)
+    * Resource limits (AS=256MB, CPU=3s, FSIZE=10MB, NPROC=256)
+    * No inherited file descriptors
+    * Process-group isolation for reliable cleanup on timeout
+
+    .. warning::
+       Does NOT provide network isolation.  The child can open sockets
+       despite the cleared proxy vars (defense-in-depth only).
+       Accepted risk: authenticated users, Railway egress restrictions.
+    """
+    _logger.warning(
+        "Host execution fallback — code runs natively without container isolation."
+    )
+
     execution = _empty_execution()
     execution["returncode"] = -1
 
-    try:
-        preexec = None
-        if sys.platform.startswith("linux"):
-            preexec = _limit_resources_linux
+    preexec = None
+    if sys.platform.startswith("linux"):
+        preexec = _limit_resources_linux
 
-        proc = subprocess.run(  # nosec B603  # noqa: S603
+    # Minimal environment — no secrets from parent process.
+    host_env: dict[str, str] = {
+        "PATH": os.environ.get("PATH", ""),
+        "HOME": os.environ.get("HOME", "/tmp"),
+        "TMPDIR": cwd or "/tmp",
+        "LC_ALL": "C.UTF-8",
+        # Best-effort network disabling (defense-in-depth, not a guarantee).
+        "NO_NETWORK": "1",
+        "http_proxy": "",
+        "https_proxy": "",
+        "HTTP_PROXY": "",
+        "HTTPS_PROXY": "",
+        "all_proxy": "",
+        "ALL_PROXY": "",
+        "no_proxy": "*",
+        "NO_PROXY": "*",
+    }
+
+    try:
+        proc = subprocess.Popen(  # noqa: S603
             host_cmd,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            check=False,
-            timeout=timeout,
-            env=_sandbox_env(),
+            env=host_env,
             preexec_fn=preexec,
             cwd=cwd,
+            close_fds=True,
         )
-        execution["stdout"] = proc.stdout or ""
-        execution["stderr"] = proc.stderr or ""
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            # Kill the entire process group (created by setpgrp in preexec_fn).
+            with contextlib.suppress(OSError):
+                os.killpg(proc.pid, signal.SIGKILL)  # noqa: E
+            stdout, stderr = proc.communicate()
+            execution["timed_out"] = True
+            execution["returncode"] = -1
+            execution["stdout"] = stdout or ""
+            execution["stderr"] = stderr or ""
+            execution["error"] = {
+                "type": "Timeout",
+                "message": "Program execution took too long and was stopped (possible infinite loop or heavy computation).",  # noqa: E501
+                "line": None,
+                "explanation": "The program did not finish within the allowed time limit.",
+                "suggestions": [
+                    "Check for infinite loops or very slow operations.",
+                    "Try running a smaller piece of the program or simplifying the logic.",
+                ],
+            }
+            return execution
+
+        execution["stdout"] = stdout or ""
+        execution["stderr"] = stderr or ""
         execution["returncode"] = proc.returncode
-    except subprocess.TimeoutExpired:
-        execution["returncode"] = -1
-        execution["timed_out"] = True
-        execution["error"] = {
-            "type": "Timeout",
-            "message": "Program execution took too long and was stopped (possible infinite loop or heavy computation).",  # noqa: E501
-            "line": None,
-            "explanation": "The program did not finish within the allowed time limit.",
-            "suggestions": [
-                "Check for infinite loops or very slow operations.",
-                "Try running a smaller piece of the program or simplifying the logic.",
-            ],
-        }
     except FileNotFoundError:
         execution["tool_missing"] = True
         execution["returncode"] = -1
@@ -255,7 +288,6 @@ def _format_host_cmd(
 ) -> list[str]:
     output = os.path.join(tmp_dir, "program")  # noqa: PTH118
     classes = os.path.join(tmp_dir, "classes")  # noqa: PTH118
-    os.makedirs(classes, exist_ok=True)  # noqa: PTH103
     return [
         part.format(source=source_path, output=output, classes=classes, main_class=main_class)
         for part in cmd
@@ -308,6 +340,8 @@ def run_in_sandbox(  # noqa: C901, PLR0911, PLR0912, PLR0915
             source_path = os.path.join(tmp_dir, source_name)  # noqa: PTH118
             with open(source_path, "w", encoding="utf-8") as f:  # noqa: PTH123
                 f.write(code)
+            # Classes dir used by Java compilation (javac -d).
+            os.makedirs(os.path.join(tmp_dir, "classes"), exist_ok=True)  # noqa: PTH103
 
             if docker is None:
                 if _host_execution_allowed():

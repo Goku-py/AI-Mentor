@@ -19,7 +19,13 @@ builder = "DOCKERFILE"
 #   GEMINI_API_KEY                 — from https://aistudio.google.com/app/apikey
 #   ALLOWED_ORIGINS                — exact frontend URL, e.g. https://your-app.railway.app
 #   FLASK_ENV=production
-#   Code execution requires Docker daemon access on the host.
+#   HOST_EXECUTION_ENABLED=1       — enable native code execution (required: Docker is
+#                                    unavailable on Railway). Hardening applied: child
+#                                    gets minimal env (no secrets), resource limits,
+#                                    process-group isolation, close_fds. See
+#                                    analyzer.py:_run_host_sandboxed for details.
+#                                    ⚠ Does NOT provide network isolation. Acceptable
+#                                    for an authenticated educational app.
 #   ⚠ DO NOT SET FLASK_DEBUG — it overrides DEBUG=False per Flask framework.
 #     If FLASK_DEBUG is set to any truthy value, ProductionConfig.validate()
 #     will raise RuntimeError and the app will not start.
