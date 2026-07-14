@@ -95,7 +95,7 @@ python-dotenv==1.2.2
     # via -r D:/College/Me/Projects/AI_Mentor/requirements.txt
 python-json-logger==4.1.0
     # via -r D:/College/Me/Projects/AI_Mentor/requirements.txt
-pywin32==311
+pywin32==311 ; sys_platform == "win32"
     # via docker
 redis==7.4.0
     # via
