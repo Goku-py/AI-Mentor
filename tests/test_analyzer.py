@@ -4,7 +4,9 @@ Unit tests for the code analyzer module.
 Run with: python -m pytest tests/test_analyzer.py -v
 """
 
+import fakeredis
 import pytest
+from datetime import date, datetime, time, timezone
 
 import analyzer
 from analyzer import (
@@ -46,10 +48,16 @@ class TestToolVerification:
         assert "ok" in status
         assert "mode" in status
 
+    def test_sandbox_status_includes_host_fallback_allowed(self):
+        """sandbox_runtime_status should expose whether host fallback is allowed."""
+        status = sandbox_runtime_status()
+        assert "host_fallback_allowed" in status
+        assert isinstance(status["host_fallback_allowed"], bool)
+
     def test_sandbox_unavailable_returns_safe_error(self, monkeypatch):
         """Missing Docker should fail closed with SandboxUnavailable."""
         monkeypatch.setattr(analyzer, "docker", None)
-        monkeypatch.setattr(analyzer, "_HOST_EXECUTION_ENABLED", False)
+        monkeypatch.setattr(analyzer, "_host_execution_allowed", lambda: False)
         run_in_sandbox(
             "print('x')",
             "python",
@@ -138,11 +146,10 @@ class TestErrorHelp:
 class TestAnalyzeCode:
     """Integration tests for the analyze_code function."""
 
-    @pytest.mark.asyncio
-    async def test_analyze_valid_python(self):
+    def test_analyze_valid_python(self):
         """analyze_code should successfully analyze valid Python."""
         code = "x = 10\nprint(x)"
-        result = await analyze_code(code, "python")
+        result = analyze_code(code, "python")
         assert result["ok"] is True
         assert result["language"] == "python"
         if result["execution"].get("error", {}).get("type") == "SandboxUnavailable":
@@ -150,36 +157,32 @@ class TestAnalyzeCode:
         else:
             assert result["execution"]["returncode"] == 0
 
-    @pytest.mark.asyncio
-    async def test_analyze_python_with_error(self):
+    def test_analyze_python_with_error(self):
         """analyze_code should detect runtime errors."""
         code = "x = 10 / 0"  # ZeroDivisionError
-        result = await analyze_code(code, "python")
+        result = analyze_code(code, "python")
         assert result["ok"] is True  # ok=True, but execution has error
         assert result["execution"]["returncode"] != 0 or result["execution"]["error"] is not None
 
-    @pytest.mark.asyncio
-    async def test_analyze_invalid_language(self):
+    def test_analyze_invalid_language(self):
         """Unsupported languages should be marked as such."""
         code = 'print("hello")'
-        result = await analyze_code(code, "ruby")  # Not supported
+        result = analyze_code(code, "ruby")  # Not supported
         assert (
             "unsupported" in result["ai_mentor_feedback"].lower()
             or result.get("mismatch") is True
             or any(i["code"] == "LANGUAGE_UNSUPPORTED" for i in result["issues"])
         )
 
-    @pytest.mark.asyncio
-    async def test_analyze_empty_code(self):
+    def test_analyze_empty_code(self):
         """analyze_code should handle empty code."""
-        result = await analyze_code("", "python")
+        result = analyze_code("", "python")
         assert result["summary"]["line_count"] == 0
 
-    @pytest.mark.asyncio
-    async def test_analyze_result_structure(self):
+    def test_analyze_result_structure(self):
         """analyze_code result should have correct structure."""
         code = 'print("test")'
-        result = await analyze_code(code, "python")
+        result = analyze_code(code, "python")
 
         assert "ok" in result
         assert "language" in result
@@ -194,7 +197,6 @@ class TestAnalyzeCode:
 
         assert isinstance(result["issues"], list)
 
-    @pytest.mark.asyncio
     @pytest.mark.parametrize(
         ("feedback", "status"),
         [
@@ -204,14 +206,14 @@ class TestAnalyzeCode:
             ("AI_MENTOR_BAD_RESPONSE", "bad_response"),
         ],
     )
-    async def test_ai_mentor_status_maps_stable_failure_states(self, monkeypatch, feedback, status):
+    def test_ai_mentor_status_maps_stable_failure_states(self, monkeypatch, feedback, status):
         """Analyze response should expose stable AI status metadata."""
 
-        async def fake_mentorship(*_args, **_kwargs):
+        def fake_mentorship(*_args, **_kwargs):
             return feedback
 
         monkeypatch.setattr(analyzer, "_get_ai_mentorship", fake_mentorship)
-        result = await analyze_code("print('x')", "python")
+        result = analyze_code("print('x')", "python")
         assert result["ai_mentor_feedback"] == feedback
         assert result["ai_mentor_status"] == status
 
@@ -299,11 +301,10 @@ class TestLanguageMismatchDetection:
         assert mismatch is not None
         assert mismatch["detected"] == "c"
 
-    @pytest.mark.asyncio
-    async def test_c_code_submitted_as_cpp_reports_mismatch(self):
+    def test_c_code_submitted_as_cpp_reports_mismatch(self):
         """C code under cpp selection should mismatch as C."""
         code = '#include <stdio.h>\nint main(void) {\n    printf("hi\\n");\n    return 0;\n}'
-        result = await analyze_code(code, "cpp")
+        result = analyze_code(code, "cpp")
         assert result["ok"] is False
         assert result["mismatch"] is True
         assert result["detected_language"] == "c"
@@ -313,31 +314,78 @@ class TestLanguageMismatchDetection:
 class TestPythonExecution:
     """Test Python code execution."""
 
-    @pytest.mark.asyncio
-    async def test_python_stdout_capture(self):
+    def test_python_stdout_capture(self):
         """Python stdout should be captured."""
         code = 'print("hello world")'
-        result = await analyze_code(code, "python")
+        result = analyze_code(code, "python")
         if result["execution"].get("error", {}).get("type") == "SandboxUnavailable":
             assert result["execution"]["returncode"] == -1
         else:
             assert "hello world" in result["execution"]["stdout"]
 
-    @pytest.mark.asyncio
-    async def test_python_timeout_detection(self):
+    def test_python_timeout_detection(self):
         """Infinite loops should timeout (with 1 second limit)."""
         code = "while True: pass"
-        result = await analyze_code(code, "python")
+        result = analyze_code(code, "python")
         # The _run_python function has a 3.0 second default timeout
         # For this test, we just check that either timeout happened or error occurred
         assert result["execution"]["timed_out"] is True or result["execution"]["error"] is not None
 
-    @pytest.mark.asyncio
-    async def test_python_error_parsing(self):
+    def test_python_error_parsing(self):
         """RuntimeError should be parsed correctly."""
         code = "x = undefined_variable"
-        result = await analyze_code(code, "python")
+        result = analyze_code(code, "python")
         assert result["execution"]["error"] is not None
+
+
+class TestAIQuotaAndCache:
+    """Shared-state AI quota and cache helpers use Redis when available."""
+
+    def test_check_and_increment_ai_quota_redis(self, monkeypatch):
+        """Atomic quota helper increments a Redis counter for the current day."""
+        fake = fakeredis.FakeRedis(decode_responses=True)
+        monkeypatch.setattr("app_pkg.extensions.get_redis_client", lambda: fake)
+
+        assert analyzer._check_and_increment_ai_quota() is False
+        assert analyzer._check_and_increment_ai_quota() is False
+
+        key = analyzer._ai_quota_redis_key()
+        assert int(fake.get(key)) == 2
+
+    def test_check_and_increment_ai_quota_expires_at_midnight_utc(self, monkeypatch):
+        """The daily AI quota key must expire at midnight UTC."""
+        fake = fakeredis.FakeRedis(decode_responses=True)
+        monkeypatch.setattr("app_pkg.extensions.get_redis_client", lambda: fake)
+
+        analyzer._check_and_increment_ai_quota()
+
+        key = analyzer._ai_quota_redis_key()
+        ttl = fake.ttl(key)
+        expected_expiry = datetime.combine(
+            date.today(), time.max, tzinfo=timezone.utc
+        )
+        now_utc = datetime.now(timezone.utc)
+        expected_ttl = int(expected_expiry.timestamp() - now_utc.timestamp())
+
+        # Allow a small window for test execution time.
+        assert abs(ttl - expected_ttl) <= 5
+        assert fake.ttl(key) > 0  # key has an expiration
+
+    def test_mentor_cache_redis_ttl(self, monkeypatch):
+        """Mentorship cache stores feedback under ai_mentor_cache:<key>."""
+        fake = fakeredis.FakeRedis(decode_responses=True)
+        monkeypatch.setattr("app_pkg.extensions.get_redis_client", lambda: fake)
+
+        analyzer._set_cached_mentorship("abc123", "helpful feedback")
+        assert analyzer._get_cached_mentorship("abc123") == "helpful feedback"
+        assert fake.ttl("ai_mentor_cache:abc123") > 0
+
+    def test_mentor_cache_in_memory_fallback(self, monkeypatch):
+        """Without Redis, mentorship cache falls back to the OrderedDict."""
+        monkeypatch.setattr("app_pkg.extensions.get_redis_client", lambda: None)
+
+        analyzer._set_cached_mentorship("fallback_key", "fallback feedback")
+        assert analyzer._get_cached_mentorship("fallback_key") == "fallback feedback"
 
 
 if __name__ == "__main__":

@@ -19,13 +19,6 @@ def _bool_env(key: str, *, default: bool = False) -> bool:
     return os.environ.get(key, str(default)).strip().lower() in ("1", "true", "yes")
 
 
-def _is_prod() -> bool:
-    return (os.environ.get("FLASK_ENV") or os.environ.get("APP_ENV") or "").strip().lower() in {
-        "prod",
-        "production",
-    }
-
-
 def _db_engine_options(db_url: str) -> dict:
     """Return sensible SQLAlchemy engine options based on the DB type."""
     if "sqlite" in db_url:
@@ -33,15 +26,19 @@ def _db_engine_options(db_url: str) -> dict:
         return {"poolclass": NullPool}
     # PostgreSQL / MySQL — use connection pool with health checks
     return {
-        "pool_size": int(os.environ.get("DB_POOL_SIZE", "5")),
-        "max_overflow": int(os.environ.get("DB_MAX_OVERFLOW", "10")),
-        "pool_timeout": 30,
-        "pool_recycle": 1800,  # recycle connections every 30 min (prevents stale conn)
-        "pool_pre_ping": True,  # test connection before use (prevents "server closed" crashes)
+        "pool_size": int(os.environ.get("DB_POOL_SIZE", "3")),
+        "max_overflow": int(os.environ.get("DB_MAX_OVERFLOW", "5")),
+        "pool_timeout": int(os.environ.get("DB_POOL_TIMEOUT", "10")),
+        "pool_recycle": int(os.environ.get("DB_POOL_RECYCLE", "600")),  # 10 min
+        "pool_pre_ping": _bool_env("DB_POOL_PRE_PING", default=True),
+        "echo": _bool_env("DB_ECHO", default=False),
     }
 
 
 class BaseConfig:
+    # Max request body size (applied to all environments)
+    MAX_CONTENT_LENGTH: int = 512 * 1024
+
     # Secret key
     SECRET_KEY: str = (os.environ.get("SECRET_KEY") or "").strip() or secrets.token_hex(32)
 
@@ -123,6 +120,7 @@ BaseConfig.SQLALCHEMY_ENGINE_OPTIONS = _db_engine_options(BaseConfig._raw_db_url
 
 
 class DevelopmentConfig(BaseConfig):
+    ENV: str = "development"
     DEBUG: bool = True
     JWT_COOKIE_SECURE: bool = False
     SESSION_COOKIE_SECURE: bool = False
@@ -131,8 +129,8 @@ class DevelopmentConfig(BaseConfig):
 
 
 class ProductionConfig(BaseConfig):
+    ENV: str = "production"
     DEBUG: bool = False
-    MAX_CONTENT_LENGTH: int = 512 * 1024
     JWT_COOKIE_SECURE: bool = True
     SESSION_COOKIE_SECURE: bool = True
     SESSION_COOKIE_HTTPONLY: bool = True
@@ -168,11 +166,29 @@ class ProductionConfig(BaseConfig):
             )
             raise RuntimeError(msg)
 
+        _pool_size = int(os.environ.get("DB_POOL_SIZE", "3"))
+        _max_overflow = int(os.environ.get("DB_MAX_OVERFLOW", "5"))
+        if _pool_size + _max_overflow > 20:  # noqa: PLR2004
+            msg = (
+                "CRITICAL ERROR: DB_POOL_SIZE + DB_MAX_OVERFLOW must be <= 20 in Production "
+                f"(got {_pool_size} + {_max_overflow} = {_pool_size + _max_overflow}). "
+                "Lower these values to stay within Railway/RDS connection limits."
+            )
+            raise RuntimeError(msg)
+
         allowed_origins = (os.environ.get("ALLOWED_ORIGINS") or "").strip()
         if allowed_origins == "*" or any(
             origin.strip() == "*" for origin in allowed_origins.split(",")
         ):
             msg = "CRITICAL ERROR: ALLOWED_ORIGINS must not be '*' in Production. Set an explicit allowlist."  # noqa: E501
+            raise RuntimeError(msg)
+
+        # Host execution is strictly forbidden in production; Docker sandboxing is required.
+        if _bool_env("HOST_EXECUTION_ENABLED"):
+            msg = (
+                "CRITICAL ERROR: HOST_EXECUTION_ENABLED is set in Production. "
+                "Production must use Docker sandboxing. Host execution is NOT allowed."
+            )
             raise RuntimeError(msg)
 
         # Ensure sandbox images are pinned by SHA256 digest
@@ -186,8 +202,40 @@ class ProductionConfig(BaseConfig):
                 )
                 raise RuntimeError(msg)
 
+        cls._require_redis_in_production()
         cls._check_storage_uris()
         cls._warn_redis_config()
+
+    @classmethod
+    def _require_redis_in_production(cls):
+        """Fail fast unless production uses Redis for shared state."""
+        redis_url = (os.environ.get("REDIS_URL") or "").strip()
+        if not redis_url:
+            msg = (
+                "CRITICAL ERROR: REDIS_URL environment variable MUST be set in Production! "
+                "Redis is required for consistent rate limits, auth revocation, AI quota, "
+                "AI cache, and security metrics across Gunicorn workers."
+            )
+            raise RuntimeError(msg)
+
+        _allowed_redis_schemes = ("redis://", "rediss://", "redis+ssl://")
+        rate_uri = (os.environ.get("RATE_LIMIT_STORAGE_URI") or redis_url).strip()
+        if not rate_uri.startswith(_allowed_redis_schemes):
+            msg = (
+                "CRITICAL ERROR: RATELIMIT_STORAGE_URI must use a Redis URI in Production "
+                f"(got {rate_uri}). Memory storage is not allowed because rate limits "
+                "would be per-worker instead of global."
+            )
+            raise RuntimeError(msg)
+
+        blacklist_uri = (os.environ.get("JWT_BLACKLIST_STORAGE_URI") or redis_url).strip()
+        if not blacklist_uri.startswith(_allowed_redis_schemes):
+            msg = (
+                "CRITICAL ERROR: JWT_BLACKLIST_STORAGE_URI must use a Redis URI in Production "
+                f"(got {blacklist_uri}). Memory storage is not allowed because token "
+                "revocation would not propagate across workers."
+            )
+            raise RuntimeError(msg)
 
     @classmethod
     def _check_storage_uris(cls):
@@ -214,7 +262,7 @@ class ProductionConfig(BaseConfig):
                     "Delete this env var — the app auto-detects REDIS_URL."
                 )
                 raise RuntimeError(msg)
-            if not uri.startswith(("redis://", "memory://", "mongodb://", "sentinel://")):
+            if not uri.startswith(("redis://", "rediss://", "redis+ssl://", "memory://", "mongodb://", "sentinel://")):
                 msg = (
                     f"CRITICAL ERROR: {name} has unknown scheme ({uri}). "
                     "Delete this env var to let the app auto-detect from REDIS_URL, "
@@ -224,38 +272,33 @@ class ProductionConfig(BaseConfig):
 
     @classmethod
     def _warn_redis_config(cls):
+        """Log informational messages when Redis is configured in production.
+
+        Redis is required in production, so this method only emits info-level
+        messages about auto-detection. Warnings about missing Redis are raised
+        as hard errors by _require_redis_in_production() instead.
+        """
         from flask import current_app  # noqa: PLC0415
 
-        _has_redis = bool(os.environ.get("REDIS_URL"))
         _rate_set = bool(os.environ.get("RATE_LIMIT_STORAGE_URI"))
         _blacklist_set = bool(os.environ.get("JWT_BLACKLIST_STORAGE_URI"))
         _blacklist_enabled = os.environ.get("JWT_BLACKLIST_ENABLED", "").strip()
 
-        if not _has_redis:
-            current_app.logger.warning(
-                "Production: No REDIS_URL detected. Rate limits are per-worker "
-                "(4 workers x 10 req/min = 40 req/min effective). "
-                "Add Redis plugin in Railway dashboard for global rate limiting."
-            )
-        elif not _rate_set:
+        if not _rate_set:
             current_app.logger.info(
                 "Production: Auto-detected REDIS_URL → using Redis for rate limiting."
             )
 
-        if _has_redis and not _blacklist_set and not _blacklist_enabled:
+        if not _blacklist_set and not _blacklist_enabled:
             current_app.logger.info(
                 "Production: Auto-detected REDIS_URL → JWT blacklist enabled automatically."
-            )
-        elif not _has_redis and _blacklist_enabled not in {"1", "true", "yes"}:
-            current_app.logger.warning(
-                "Production: JWT_BLACKLIST_ENABLED is not set. "
-                "Logout does not invalidate JWT tokens until Redis is provisioned."
             )
 
 
 class TestingConfig(BaseConfig):
     """Used by pytest. Overrides point to an in-memory SQLite DB."""
 
+    ENV: str = "testing"
     TESTING: bool = True
     DEBUG: bool = False
 

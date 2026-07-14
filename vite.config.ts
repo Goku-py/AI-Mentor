@@ -15,7 +15,7 @@ export default defineConfig({
     port: 5173,
     host: "localhost",
     watch: {
-      ignored: ["**/.venv/**", "**/node_modules/**", "**/__pycache__/**"],
+      ignored: ["**/.venv/**", "**/venv/**", "**/node_modules/**", "**/__pycache__/**"],
     },
   },
   build: {

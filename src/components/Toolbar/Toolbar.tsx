@@ -1,7 +1,8 @@
 import { PlayIcon, SunIcon, MoonIcon, LanguageIcon, UploadIcon, TrashIcon, FullscreenIcon, ShareIcon, CodeIcon } from "../Icons";
 import LanguageSelector from "../Editor/LanguageSelector";
 import UserBadge from "../Auth/UserBadge";
-import type { User } from "../../types";
+import type { User, Difficulty } from "../../types";
+import { DIFFICULTIES } from "../../types";
 
 interface ToolbarProps {
   code: string;
@@ -14,6 +15,8 @@ interface ToolbarProps {
   onRun: () => void;
   onCycleLanguage: () => void;
   onLanguageChange: (lang: string) => void;
+  difficulty: Difficulty;
+  onDifficultyChange: (difficulty: Difficulty) => void;
   onIncreaseFont: () => void;
   onDecreaseFont: () => void;
   onToggleDarkMode: () => void;
@@ -35,6 +38,8 @@ export default function Toolbar({
   onRun,
   onCycleLanguage,
   onLanguageChange,
+  difficulty,
+  onDifficultyChange,
   onIncreaseFont,
   onDecreaseFont,
   onToggleDarkMode,
@@ -63,6 +68,19 @@ export default function Toolbar({
           onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onFileUploadClick(); } }}
         ><UploadIcon /></button>
         <LanguageSelector language={language} onLanguageChange={onLanguageChange} />
+        <div className="difficulty-selector-wrapper">
+          <select
+            className="language-select difficulty-select"
+            value={difficulty}
+            onChange={(e: React.ChangeEvent<HTMLSelectElement>) => onDifficultyChange(e.target.value as Difficulty)}
+            title="Select mentorship difficulty"
+            aria-label="Select mentorship difficulty"
+          >
+            {DIFFICULTIES.map((level) => (
+              <option key={level.id} value={level.id}>{level.name}</option>
+            ))}
+          </select>
+        </div>
         <button
           className="run-btn"
           onClick={onRun}

@@ -98,9 +98,10 @@ def debug_gemini_status():  # noqa: C901, PLR0911, PLR0912
             error_json = json.loads(error_body) if error_body else {}
             error_message = error_json.get("error", {}).get("message", "")
         except Exception:  # noqa: BLE001
+            error_body = ""
             error_message = ""
-        haystack = (
-        )
+        body_text = error_body
+        haystack = f"{error_message} {body_text}"
         if status_code == 403:  # noqa: PLR2004
             if "api has not been used" in haystack or "disabled" in haystack:
                 return jsonify(

@@ -1,101 +1,103 @@
-import { useEffect } from "react";
-import Prism from "prismjs";
-import Editor from "react-simple-code-editor";
+import { useRef, useEffect } from "react";
+import Editor, { OnMount } from "@monaco-editor/react";
 import { CodeIcon } from "../Icons";
-
-function escapeHtml(unsafe: string): string {
-  return unsafe
-    .replace(/&/g, "&amp;")
-    .replace(/</g, "&lt;")
-    .replace(/>/g, "&gt;")
-    .replace(/"/g, "&quot;")
-    .replace(/'/g, "&#039;");
-}
 
 interface EditorPaneProps {
   code: string;
   language: string;
   fontSize: number;
   errorLine: number | null;
-  editorWrapperRef: React.RefObject<HTMLDivElement>;
+  darkMode: boolean;
   onCodeChange: (code: string) => void;
   onRun?: () => void;
 }
+
+const LANGUAGE_MAP: Record<string, string> = {
+  python: "python",
+  javascript: "javascript",
+  java: "java",
+  c: "c",
+  cpp: "cpp",
+};
 
 export default function EditorPane({
   code,
   language,
   fontSize,
   errorLine,
-  editorWrapperRef,
+  darkMode,
   onCodeChange,
   onRun,
 }: EditorPaneProps) {
+  const editorRef = useRef<Parameters<OnMount>[0] | null>(null);
+  const monacoRef = useRef<Parameters<OnMount>[1] | null>(null);
+  const decorationRef = useRef<string[]>([]);
+  const onRunRef = useRef(onRun);
+  onRunRef.current = onRun;
+
+  const handleEditorMount: OnMount = (editor, monaco) => {
+    editorRef.current = editor;
+    monacoRef.current = monaco;
+    editor.focus();
+
+    editor.addAction({
+      id: "run-code",
+      label: "Run Code",
+      keybindings: [monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter],
+      run: () => onRunRef.current?.(),
+    });
+  };
+
   useEffect(() => {
-    const textarea = editorWrapperRef.current?.querySelector("textarea");
-    textarea?.focus();
-  }, [editorWrapperRef]);
+    const editor = editorRef.current;
+    const monaco = monacoRef.current;
+    if (!editor || !monaco) return;
+
+    const newDecorations = errorLine != null
+      ? [{
+          range: new monaco.Range(errorLine, 1, errorLine, 1),
+          options: {
+            isWholeLine: true,
+            className: "error-line-monaco",
+            marginClassName: "error-line-margin",
+          },
+        }]
+      : [];
+
+    decorationRef.current = editor.deltaDecorations(decorationRef.current, newDecorations);
+
+    if (errorLine != null) {
+      editor.revealLineInCenter(errorLine);
+    }
+  }, [errorLine]);
+
+  const monacoLanguage = LANGUAGE_MAP[language] || "plaintext";
 
   return (
     <div className="editor-pane">
       <div className="pane-header">
         <CodeIcon /> Editor
       </div>
-      <div
-        style={{
-          flex: 1,
-          overflowY: "auto",
-          overflowX: "auto",
-          backgroundColor: "var(--bg-color)",
-          minHeight: 0,
-          display: "flex",
-        }}
-        className="editor-container"
-      >
-        <div className="line-numbers" aria-hidden="true" style={{ fontSize: fontSize + "px", minHeight: "100%" }}>
-          {code.replace(/\n+$/, "").split("\n").map((_, i) => (
-            <div key={i} style={{ height: "1.6em" }}>{i + 1}</div>
-          ))}
-        </div>
-        <div style={{ flex: 1, position: "relative", minHeight: 0 }} ref={editorWrapperRef}>
-          <Editor
-            key={language}
-            value={code}
-            onValueChange={(newCode: string) => {
-              onCodeChange(newCode.replace(/\r\n/g, "\n").replace(/\r/g, "\n"));
-            }}
-            onKeyDown={(e: React.KeyboardEvent) => {
-              if (e.ctrlKey && e.key === "Enter") {
-                e.preventDefault();
-                onRun?.();
-              }
-            }}
-            highlight={(codeToHighlight: string) => {
-              const grammar = language === "cpp" || language === "c"
-                ? Prism.languages.cpp || Prism.languages.clike
-                : language === "java"
-                  ? Prism.languages.java || Prism.languages.clike
-                  : language === "javascript"
-                    ? Prism.languages.javascript
-                    : Prism.languages.python;
-              const highlighted = grammar
-                ? Prism.highlight(codeToHighlight, grammar, language)
-                : escapeHtml(codeToHighlight);
-              return highlighted
-                .split("\n")
-                .map((line, idx) => `<span class="${errorLine === idx + 1 ? "error-line" : ""}">${line || " "}</span>`)
-                .join("\n");
-            }}
-            padding={24}
-            style={{
-              fontFamily: "var(--font-mono)",
-              fontSize: fontSize,
-              minHeight: "100%",
-              whiteSpace: "pre",
-            }}
-            textareaClassName="code-textarea"
-          />
-        </div>
+      <div style={{ flex: 1, minHeight: 0 }}>
+        <Editor
+          language={monacoLanguage}
+          value={code}
+          onChange={(value) => onCodeChange(value ?? "")}
+          theme={darkMode ? "vs-dark" : "vs"}
+          options={{
+            fontSize,
+            minimap: { enabled: false },
+            lineNumbers: "on",
+            scrollBeyondLastLine: false,
+            automaticLayout: true,
+            padding: { top: 24 },
+            fontFamily: "'Fira Code', ui-monospace, SFMono-Regular, monospace",
+            renderLineHighlight: "all",
+            tabSize: 4,
+            insertSpaces: true,
+          }}
+          onMount={handleEditorMount}
+        />
       </div>
     </div>
   );

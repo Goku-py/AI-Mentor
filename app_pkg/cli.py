@@ -106,3 +106,16 @@ def register_cli(app: Flask) -> None:  # noqa: C901, PLR0915
                     click.echo("[db-check] ✗ alembic_version is empty — run: flask db upgrade")
         except Exception:  # noqa: BLE001
             click.echo("[db-check] ✗ alembic_version table missing — run: flask db upgrade")
+
+    @app.cli.command("worker")
+    def worker() -> None:
+        """Start the RQ worker for background analysis jobs."""
+        import os  # noqa: PLC0415
+
+        from app_pkg.extensions import get_rq_queue  # noqa: PLC0415
+
+        queue = get_rq_queue()
+        timeout = int(os.environ.get("RQ_WORKER_TIMEOUT", "300"))
+        click.echo(f"[worker] Starting RQ worker on queue={queue.name} timeout={timeout}s")
+        worker = queue.create_worker()
+        worker.work()

@@ -1,3 +1,5 @@
+import ReactMarkdown from "react-markdown";
+import remarkGfm from "remark-gfm";
 import { SparklesIcon } from "../Icons";
 import type { Issue, AiMentorStatus } from "../../types";
 import { aiMentorStatusCopy } from "../../types";
@@ -10,26 +12,6 @@ interface MentorPaneProps {
   issues: Issue[];
 }
 
-const renderMarkdown = (text: string | null | undefined) => {
-  if (!text) return null;
-  const parts = text.split(/(```[\s\S]*?```|`[^`]+`|\*\*[^*]+\*\*|\n\n)/g);
-  return parts.map((part, i) => {
-    if (part === "\n\n") return <br key={i} />;
-    if (part.startsWith("```") && part.endsWith("```")) {
-      const lines = part.slice(3, -3).split("\n");
-      const code = lines.slice(1).join("\n") || lines[0];
-      return <pre key={i}><code>{code}</code></pre>;
-    }
-    if (part.startsWith("`") && part.endsWith("`")) {
-      return <code key={i}>{part.slice(1, -1)}</code>;
-    }
-    if (part.startsWith("**") && part.endsWith("**")) {
-      return <strong key={i}>{part.slice(2, -2)}</strong>;
-    }
-    return <span key={i}>{part}</span>;
-  });
-};
-
 export default function MentorPane({
   isAnalyzing,
   mentorFeedback,
@@ -37,6 +19,9 @@ export default function MentorPane({
   errorMsg,
   issues,
 }: MentorPaneProps) {
+  const showLooksGood = mentorFeedback && (mentorFeedback === "LOOKS_GOOD" || mentorFeedback.startsWith("LOOKS_GOOD"));
+  const showFeedback = mentorFeedback && !showLooksGood;
+
   return (
     <div className="mentor-pane">
       <div className="pane-header accent-text">
@@ -52,9 +37,26 @@ export default function MentorPane({
             <br />
             {aiMentorStatusCopy[aiMentorStatus]?.body || "Check the server AI configuration and try again."}
           </div>
-        ) : mentorFeedback && !(mentorFeedback === "LOOKS_GOOD" || mentorFeedback.startsWith("LOOKS_GOOD")) ? (
-          <div>{renderMarkdown(mentorFeedback)}</div>
-        ) : mentorFeedback && (mentorFeedback === "LOOKS_GOOD" || mentorFeedback.startsWith("LOOKS_GOOD")) ? (
+        ) : showFeedback ? (
+          <ReactMarkdown
+            remarkPlugins={[remarkGfm]}
+            components={{
+              code({ className, children }) {
+                const isInline = !className;
+                if (isInline) {
+                  return <code>{children}</code>;
+                }
+                return (
+                  <pre>
+                    <code className={className}>{children}</code>
+                  </pre>
+                );
+              },
+            }}
+          >
+            {mentorFeedback}
+          </ReactMarkdown>
+        ) : showLooksGood ? (
           <div className="placeholder-text">
             <SparklesIcon />
             Your code ran successfully! No errors or logical flaws detected.

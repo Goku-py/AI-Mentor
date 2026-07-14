@@ -1,3 +1,4 @@
+import { Group, Panel, Separator } from "react-resizable-panels";
 import { useAuth } from "./hooks/useAuth";
 import { useSettings } from "./hooks/useSettings";
 import { useCode } from "./hooks/useCode";
@@ -16,6 +17,7 @@ export default function App() {
     accessToken: auth.accessToken,
     csrfToken: auth.csrfToken,
     tryRefreshToken: auth.tryRefreshToken,
+    refreshCsrfToken: auth.refreshCsrfToken,
     onUnauthenticated: auth.handleUnauthenticated,
   });
 
@@ -56,6 +58,8 @@ export default function App() {
           onRun={code.handleRun}
           onCycleLanguage={code.cycleLanguage}
           onLanguageChange={(lang) => code.handleLanguageChange(lang)}
+          difficulty={code.difficulty}
+          onDifficultyChange={code.setDifficulty}
           onIncreaseFont={settings.increaseFont}
           onDecreaseFont={settings.decreaseFont}
           onToggleDarkMode={settings.toggleDarkMode}
@@ -67,35 +71,40 @@ export default function App() {
           onLogout={auth.handleLogout}
         />
 
-        <div className="main-content">
-          <EditorPane
-            code={code.code}
-            language={code.language}
-            fontSize={settings.fontSize}
-            errorLine={code.errorLine}
-            editorWrapperRef={code.editorWrapperRef}
-            onCodeChange={code.setCode}
-            onRun={code.handleRun}
-          />
-          <div className="side-pane">
-            <OutputPane
-              output={code.output}
-              errorMsg={code.errorMsg}
-              issues={code.issues}
-              mismatchInfo={code.mismatchInfo}
+        <Group orientation="vertical" className="main-content">
+          <Panel defaultSize={50} minSize={15}>
+            <EditorPane
+              code={code.code}
               language={code.language}
-              onLanguageChange={code.handleLanguageChange}
-              onClearMismatch={code.clearMismatch}
+              fontSize={settings.fontSize}
+              errorLine={code.errorLine}
+              darkMode={settings.darkMode}
+              onCodeChange={code.setCode}
+              onRun={code.handleRun}
             />
-            <MentorPane
-              isAnalyzing={code.isAnalyzing}
-              mentorFeedback={code.mentorFeedback}
-              aiMentorStatus={code.aiMentorStatus}
-              errorMsg={code.errorMsg}
-              issues={code.issues}
-            />
-          </div>
-        </div>
+          </Panel>
+          <Separator className="resize-handle" />
+          <Panel defaultSize={50} minSize={15}>
+            <div className="side-pane">
+              <OutputPane
+                output={code.output}
+                errorMsg={code.errorMsg}
+                issues={code.issues}
+                mismatchInfo={code.mismatchInfo}
+                language={code.language}
+                onLanguageChange={code.handleLanguageChange}
+                onClearMismatch={code.clearMismatch}
+              />
+              <MentorPane
+                isAnalyzing={code.isAnalyzing}
+                mentorFeedback={code.mentorFeedback}
+                aiMentorStatus={code.aiMentorStatus}
+                errorMsg={code.errorMsg}
+                issues={code.issues}
+              />
+            </div>
+          </Panel>
+        </Group>
       </div>
     </ErrorBoundary>
   );

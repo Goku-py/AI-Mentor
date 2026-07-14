@@ -3,11 +3,14 @@ import type {
   Issue,
   MismatchInfo,
   AnalyzeResponse,
+  AnalyzeJobResponse,
+  AnalyzeStatusResponse,
   AiMentorStatus,
   ExecutionResult,
+  Difficulty,
 } from "../types";
-import { DEFAULT_CODE, EXTENSION_MAP, SUPPORTED_LANGUAGES } from "../types";
-import { analyzeCode, fetchCsrfToken } from "../services/api";
+import { DEFAULT_CODE, EXTENSION_MAP, SUPPORTED_LANGUAGES, DEFAULT_DIFFICULTY, DIFFICULTIES } from "../types";
+import { submitAnalyzeJob, pollAnalyzeStatus } from "../services/api";
 import { showToast } from "../components/Toast";
 
 const inferAiMentorStatus = (feedback: string): AiMentorStatus => {
@@ -43,10 +46,26 @@ const formatExecutionError = (execution: ExecutionResult | null | undefined, fal
   return execution.stderr || error?.message || fallback;
 };
 
+function pollDelay(ms: number, signal: AbortSignal): Promise<void> {
+  return new Promise((resolve, reject) => {
+    const timer = setTimeout(resolve, ms);
+    const onAbort = () => {
+      clearTimeout(timer);
+      reject(new DOMException("The operation was aborted.", "AbortError"));
+    };
+    if (signal.aborted) {
+      onAbort();
+      return;
+    }
+    signal.addEventListener("abort", onAbort, { once: true });
+  });
+}
+
 export interface UseCodeOptions {
   accessToken: string | null;
   csrfToken: string;
   tryRefreshToken: () => Promise<string | null>;
+  refreshCsrfToken: () => Promise<string>;
   onUnauthenticated: () => void;
 }
 
@@ -61,12 +80,14 @@ export interface UseCodeReturn {
   aiMentorStatus: AiMentorStatus;
   issues: Issue[];
   mismatchInfo: MismatchInfo | null;
-  editorWrapperRef: React.RefObject<HTMLDivElement>;
   fileInputRef: React.RefObject<HTMLInputElement>;
   setCode: (code: string) => void;
   setLanguage: (lang: string) => void;
   handleLanguageChange: (newLang: string, keepCurrentCode?: boolean) => void;
   cycleLanguage: () => void;
+  difficulty: Difficulty;
+  setDifficulty: (difficulty: Difficulty) => void;
+  cycleDifficulty: () => void;
   handleRun: () => Promise<void>;
   clearOutput: () => void;
   clearMismatch: () => void;
@@ -77,10 +98,11 @@ export interface UseCodeReturn {
 const MAX_FILE_SIZE = 1024 * 1024;
 
 export function useCode(options: UseCodeOptions): UseCodeReturn {
-  const { accessToken, csrfToken, tryRefreshToken, onUnauthenticated } = options;
+  const { accessToken, csrfToken, tryRefreshToken, refreshCsrfToken, onUnauthenticated } = options;
 
   const [code, setCode] = useState<string>(DEFAULT_CODE.python);
   const [language, setLanguage] = useState<string>("python");
+  const [difficulty, setDifficulty] = useState<Difficulty>(DEFAULT_DIFFICULTY);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [errorLine, setErrorLine] = useState<number | null>(null);
   const [output, setOutput] = useState("");
@@ -89,7 +111,6 @@ export function useCode(options: UseCodeOptions): UseCodeReturn {
   const [aiMentorStatus, setAiMentorStatus] = useState<AiMentorStatus>("ok");
   const [issues, setIssues] = useState<Issue[]>([]);
   const [mismatchInfo, setMismatchInfo] = useState<MismatchInfo | null>(null);
-  const editorWrapperRef = useRef<HTMLDivElement>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
   const abortRef = useRef<AbortController | null>(null);
 
@@ -98,44 +119,8 @@ export function useCode(options: UseCodeOptions): UseCodeReturn {
     return () => abortRef.current?.abort();
   }, []);
 
-  // Load Prism language on language change
-  useEffect(() => {
-    const loadPrismLanguage = async () => {
-      if (language === "javascript") {
-        await import("prismjs/components/prism-javascript");
-      } else if (language === "python") {
-        await import("prismjs/components/prism-python");
-      } else if (language === "java") {
-        await import("prismjs/components/prism-clike");
-        await import("prismjs/components/prism-java");
-      } else if (language === "c" || language === "cpp") {
-        await import("prismjs/components/prism-clike");
-        await import("prismjs/components/prism-c");
-        await import("prismjs/components/prism-cpp");
-      }
-    };
-    loadPrismLanguage();
-  }, [language]);
-
-  // Scroll to error line
-  useEffect(() => {
-    if (errorLine == null || !editorWrapperRef.current) return;
-
-    const textarea = editorWrapperRef.current.querySelector("textarea.code-textarea") as HTMLTextAreaElement | null;
-    if (!textarea) return;
-
-    const computed = window.getComputedStyle(textarea);
-    const lineHeight = parseFloat(computed.lineHeight) || 16 * 1.6;
-    const targetScrollTop = Math.max(
-      (errorLine - 1) * lineHeight - (textarea.clientHeight / 2) + (lineHeight / 2),
-      0,
-    );
-
-    textarea.scrollTop = targetScrollTop;
-  }, [errorLine]);
-
   const handleRun = useCallback(async () => {
-    // Abort any previous in-flight request
+    // Abort any previous in-flight request or polling loop
     abortRef.current?.abort();
     const controller = new AbortController();
     abortRef.current = controller;
@@ -149,45 +134,20 @@ export function useCode(options: UseCodeOptions): UseCodeReturn {
     setErrorLine(null);
     setMismatchInfo(null);
 
-    try {
-      let token = csrfToken;
-      if (!token) {
-        for (let attempt = 0; attempt < 3; attempt++) {
-          try {
-            token = await fetchCsrfToken(controller.signal);
-            if (token) break;
-          } catch {
-            token = "";
-          }
-          if (attempt < 2) await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
-        }
-        if (!token) {
-          setErrorMsg("Session verification failed. Please refresh the page.");
-          setMentorFeedback("");
-          setIsAnalyzing(false);
-          return;
-        }
-      }
-      let response = await analyzeCode(code, language, accessToken, token, controller.signal);
-
-      if (response.status === 401 && accessToken) {
-        const newToken = await tryRefreshToken();
-        if (!newToken) {
-          onUnauthenticated();
-        }
-        response = await analyzeCode(code, language, newToken || null, token, controller.signal);
-      }
-
-      let data: AnalyzeResponse;
+    const looksLikeCsrfError = async (response: Response): Promise<boolean> => {
+      if (response.status !== 403) return false;
       try {
-        data = (await response.json()) as AnalyzeResponse;
+        const clone = response.clone();
+        const data = (await clone.json()) as Record<string, unknown>;
+        const text = JSON.stringify(data).toLowerCase();
+        return text.includes("csrf") || text.includes("forbidden");
       } catch {
-        setErrorMsg("Invalid JSON response from server.");
-        setMentorFeedback("");
-        setIsAnalyzing(false);
-        return;
+        const text = await response.clone().text();
+        return text.toLowerCase().includes("csrf");
       }
+    };
 
+    const renderAnalyzeResult = (data: AnalyzeResponse) => {
       const meta = data.meta;
 
       if (meta?.issues) setIssues(meta.issues);
@@ -230,6 +190,110 @@ export function useCode(options: UseCodeOptions): UseCodeReturn {
         setMentorFeedback("");
         setAiMentorStatus((meta?.ai_mentor_status as AiMentorStatus) || "ok");
       }
+    };
+
+    const getStatusMessage = (status: string): string => {
+      if (status === "queued") return "Queued...";
+      if (status === "started") return "Running your code...";
+      return "Analyzing...";
+    };
+
+    try {
+      let response = await submitAnalyzeJob(
+        code,
+        language,
+        accessToken,
+        csrfToken,
+        controller.signal,
+        difficulty,
+      );
+
+      if (await looksLikeCsrfError(response)) {
+        const newCsrfToken = await refreshCsrfToken();
+        response = await submitAnalyzeJob(
+          code,
+          language,
+          accessToken,
+          newCsrfToken,
+          controller.signal,
+          difficulty,
+        );
+      }
+
+      if (response.status === 401 && accessToken) {
+        const newToken = await tryRefreshToken();
+        if (!newToken) {
+          onUnauthenticated();
+        }
+        response = await submitAnalyzeJob(
+          code,
+          language,
+          newToken || null,
+          csrfToken,
+          controller.signal,
+          difficulty,
+        );
+      }
+
+      if (response.status === 202) {
+        let jobData: AnalyzeJobResponse;
+        try {
+          jobData = (await response.json()) as AnalyzeJobResponse;
+        } catch {
+          setErrorMsg("Invalid JSON response from server.");
+          setMentorFeedback("");
+          setIsAnalyzing(false);
+          return;
+        }
+
+        const jobId = jobData.job_id;
+        const maxAttempts = 45;
+        setMentorFeedback(getStatusMessage(jobData.status));
+
+        for (let attempt = 0; attempt < maxAttempts; attempt++) {
+          if (controller.signal.aborted) {
+            throw new DOMException("The operation was aborted.", "AbortError");
+          }
+          await pollDelay(1000, controller.signal);
+
+          const status = (await pollAnalyzeStatus(jobId, controller.signal)) as AnalyzeStatusResponse;
+          setMentorFeedback(getStatusMessage(status.status));
+
+          if (status.status === "finished") {
+            if (status.result) {
+              renderAnalyzeResult(status.result);
+            } else {
+              setErrorMsg("Analysis finished but no result was returned.");
+            }
+            setIsAnalyzing(false);
+            return;
+          }
+
+          if (status.status === "failed") {
+            setErrorMsg(status.error || "Analysis failed.");
+            setMentorFeedback("");
+            setIsAnalyzing(false);
+            return;
+          }
+        }
+
+        setErrorMsg("Analysis timed out. Please try again.");
+        setMentorFeedback("");
+        setIsAnalyzing(false);
+        return;
+      }
+
+      let data: AnalyzeResponse;
+      try {
+        data = (await response.json()) as AnalyzeResponse;
+      } catch {
+        setErrorMsg("Invalid JSON response from server.");
+        setMentorFeedback("");
+        setIsAnalyzing(false);
+        return;
+      }
+
+      renderAnalyzeResult(data);
     } catch (err: unknown) {
       if (err instanceof DOMException && err.name === "AbortError") return;
       setErrorMsg("Network error: Could not reach the server.");
@@ -239,7 +303,7 @@ export function useCode(options: UseCodeOptions): UseCodeReturn {
         setIsAnalyzing(false);
       }
     }
-  }, [code, language, accessToken, csrfToken, tryRefreshToken, onUnauthenticated]);
+  }, [code, language, difficulty, accessToken, csrfToken, tryRefreshToken, refreshCsrfToken, onUnauthenticated]);
 
   const handleLanguageChange = useCallback((newLang: string, keepCurrentCode = false) => {
     setLanguage(newLang);
@@ -253,6 +317,12 @@ export function useCode(options: UseCodeOptions): UseCodeReturn {
     const idx = langs.indexOf(language as (typeof SUPPORTED_LANGUAGES)[number]["id"]);
     handleLanguageChange(langs[(idx + 1) % langs.length]);
   }, [language, handleLanguageChange]);
+
+  const cycleDifficulty = useCallback(() => {
+    const levels = DIFFICULTIES.map((d) => d.id);
+    const idx = levels.indexOf(difficulty);
+    setDifficulty(levels[(idx + 1) % levels.length]);
+  }, [difficulty]);
 
   const clearOutput = useCallback(() => {
     setOutput("");
@@ -312,12 +382,14 @@ export function useCode(options: UseCodeOptions): UseCodeReturn {
     aiMentorStatus,
     issues,
     mismatchInfo,
-    editorWrapperRef,
     fileInputRef,
     setCode,
     setLanguage,
     handleLanguageChange,
     cycleLanguage,
+    difficulty,
+    setDifficulty,
+    cycleDifficulty,
     handleRun,
     clearOutput,
     clearMismatch,

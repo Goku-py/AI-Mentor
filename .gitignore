@@ -83,3 +83,9 @@ out.txt
 
 # Security audit reports (generated, not source)
 AUDIT_REPORT_*.md
+
+testsprite_tests\tmp\config.json
+
+# Project docs (PRD, API docs)
+AI-Mentor-PRD.pdf
+api_docs.md

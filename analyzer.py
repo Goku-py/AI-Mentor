@@ -1,7 +1,6 @@
 from __future__ import annotations
 
 import ast
-import asyncio
 import contextlib
 import hashlib
 import json
@@ -11,25 +10,22 @@ import re
 import subprocess  # nosec B404
 import sys
 import tempfile
+import threading
 import time
 import urllib.error
 import urllib.parse
 import urllib.request
 from collections import OrderedDict
 from dataclasses import dataclass
+from datetime import date, datetime, time as dt_time, timezone
 from typing import Any
 
 import httpx
+import requests
 from flask import current_app
 
-from app_pkg.security.middleware import SECURITY_METRICS
-
-_logger = logging.getLogger(__name__)
-
-
-class SafeResult(dict):
-    pass
-
+from app_pkg.gemini_circuit import GeminiCircuitBreaker
+from app_pkg.utils import is_production
 
 try:
     import docker
@@ -124,41 +120,153 @@ def _sandbox_env() -> dict[str, str]:
     return env
 
 
-def _limit_resources_linux() -> None:
-    if not sys.platform.startswith("linux"):
+def _apply_resource_limits_to_pid(pid: int) -> None:
+    """Best-effort post-start resource limits for a specific process (non-Linux)."""
+    if sys.platform.startswith("linux"):
         return
-    import os as _os  # noqa: PLC0415
-    import resource  # noqa: PLC0415
 
-    _os.nice(19)
-    _os.setpgrp()
-    memory_limit = 256 * 1024 * 1024
-    resource.setrlimit(resource.RLIMIT_AS, (memory_limit, memory_limit))
-    resource.setrlimit(resource.RLIMIT_CPU, (3, 3))
-    resource.setrlimit(resource.RLIMIT_NPROC, (256, 256))
+    if is_production():
+        raise RuntimeError(
+            "Host execution cannot be safely limited on this platform in production. "
+            "Use Docker sandboxing."
+        )
+
+    try:
+        import psutil  # noqa: PLC0415
+
+        p = psutil.Process(pid)
+        if hasattr(p, "nice"):
+            with contextlib.suppress(Exception):
+                p.nice(psutil.IDLE_PRIORITY_CLASS if sys.platform == "win32" else 19)
+    except Exception:  # noqa: BLE001
+        _logger.debug("Could not apply psutil resource limits to pid %s", pid)
+
+
+def _apply_resource_limits() -> None:
+    """Apply platform-specific resource limits for host-fallback execution.
+
+    Linux uses rlimits via preexec_fn. Windows uses job objects or psutil when
+    available. Limits are configurable via environment variables.
+    """
+    memory_mb = int(os.environ.get("SANDBOX_MEMORY_MB", "256"))
+    cpu_seconds = int(os.environ.get("SANDBOX_CPU_SECONDS", "3"))
+    max_pids = int(os.environ.get("SANDBOX_MAX_PIDS", "256"))
+
+    if sys.platform.startswith("linux"):
+        import resource  # noqa: PLC0415
+
+        os.nice(19)
+        os.setpgrp()
+        memory_limit = max(64, memory_mb) * 1024 * 1024
+        resource.setrlimit(resource.RLIMIT_AS, (memory_limit, memory_limit))
+        resource.setrlimit(resource.RLIMIT_CPU, (cpu_seconds, cpu_seconds))
+        resource.setrlimit(resource.RLIMIT_NPROC, (max_pids, max_pids))
+        return
+
+    # Non-Linux platforms cannot use POSIX rlimits. Apply best-effort controls.
+    if is_production():
+        raise RuntimeError(
+            "Host execution cannot be safely limited on this platform in production. "
+            "Use Docker sandboxing."
+        )
+
+    _logger.warning(
+        "Host fallback on non-Linux platform: POSIX rlimits are unavailable. "
+        "Consider running inside Docker for deterministic sandboxing."
+    )
+
+    # psutil: lower child process priority/nice on supported platforms.
+    try:
+        import psutil  # noqa: PLC0415
+
+        p = psutil.Process(os.getpid())
+        if hasattr(p, "nice"):
+            with contextlib.suppress(Exception):
+                p.nice(psutil.IDLE_PRIORITY_CLASS if sys.platform == "win32" else 19)
+    except ImportError:
+        pass
+
+    # Windows job object: enforce CPU and memory limits if pywin32 is available.
+    if sys.platform == "win32":
+        try:
+            import win32api  # noqa: PLC0415
+            import win32job  # noqa: PLC0415
+
+            h_job = win32job.CreateJobObject(None, "")
+            limits = win32job.JOBOBJECT_EXTENDED_LIMIT_INFORMATION()
+            limits.BasicLimitInformation.LimitFlags = (
+                win32job.JOB_OBJECT_LIMIT_PROCESS_MEMORY
+                | win32job.JOB_OBJECT_LIMIT_JOB_TIME
+            )
+            limits.ProcessMemoryLimit = max(64, memory_mb) * 1024 * 1024
+            limits.JobMemoryLimit = max(64, memory_mb) * 1024 * 1024
+            limits.BasicLimitInformation.PerJobUserTimeLimit = max(1, cpu_seconds) * 10_000_000
+            win32job.SetInformationJobObject(
+                h_job,
+                win32job.JobObjectExtendedLimitInformation,
+                limits,
+            )
+            win32job.AssignProcessToJobObject(h_job, win32api.GetCurrentProcess())
+        except Exception:  # noqa: BLE001
+            _logger.debug("Windows job-object resource limits not applied")
+
+
+# Cache sandbox status briefly to avoid pinging Docker on every /health call.
+_SANDBOX_STATUS_CACHE: dict[str, Any] | None = None
+_SANDBOX_STATUS_CACHE_TIME: float = 0.0
+_SANDBOX_STATUS_CACHE_TTL_SECONDS: float = 10.0
+_SANDBOX_STATUS_LOCK = threading.Lock()
 
 
 def sandbox_runtime_status() -> dict[str, Any]:
-    """Return runtime sandbox readiness for startup checks."""
+    """Return runtime sandbox readiness for startup checks.
+
+    The result is cached for a short TTL because this function is called on
+    every /health request and creating a Docker client each time leaks
+    connections.
+    """
+    global _SANDBOX_STATUS_CACHE, _SANDBOX_STATUS_CACHE_TIME  # noqa: PLW0603
+
+    now = time.monotonic()
+    with _SANDBOX_STATUS_LOCK:
+        if (
+            _SANDBOX_STATUS_CACHE is not None
+            and now - _SANDBOX_STATUS_CACHE_TIME < _SANDBOX_STATUS_CACHE_TTL_SECONDS
+        ):
+            return dict(_SANDBOX_STATUS_CACHE)
+
     status = {
         "ok": False,
         "docker_sdk_installed": docker is not None,
         "docker_daemon_available": False,
         "mode": "unavailable",
         "reason": "",
+        "host_fallback_allowed": _host_execution_allowed(),
     }
     if docker is None:
         status["reason"] = "Docker SDK not installed. Sandbox required."
+        with _SANDBOX_STATUS_LOCK:
+            _SANDBOX_STATUS_CACHE = dict(status)
+            _SANDBOX_STATUS_CACHE_TIME = now
         return status
+
+    client = None
     try:
         client = docker.from_env()
         client.ping()
+        status["ok"] = True
+        status["docker_daemon_available"] = True
+        status["mode"] = "docker"
     except Exception as exc:  # noqa: BLE001
         status["reason"] = f"Docker daemon unavailable: {exc}"
-        return status
-    status["ok"] = True
-    status["docker_daemon_available"] = True
-    status["mode"] = "docker"
+    finally:
+        if client is not None:
+            with contextlib.suppress(Exception):
+                client.close()
+
+    with _SANDBOX_STATUS_LOCK:
+        _SANDBOX_STATUS_CACHE = dict(status)
+        _SANDBOX_STATUS_CACHE_TIME = now
     return status
 
 
@@ -180,7 +288,22 @@ def _sandbox_unavailable_execution(message: str, explanation: str) -> dict[str, 
 
 
 def _host_execution_allowed() -> bool:
+    """Return True only when host fallback is explicitly enabled AND not in production."""
+    if is_production():
+        return False
     return os.environ.get("HOST_EXECUTION_ENABLED", "").strip() == "1"
+
+
+def _cleanup_container(container) -> None:
+    """Force-remove a Docker container, ignoring already-removed containers."""
+    if container is None:
+        return
+    try:
+        container.reload()
+        if container.status not in {"removing", "removed", "dead"}:
+            container.remove(force=True, v=True)
+    except Exception as exc:  # noqa: BLE001
+        _logger.debug("Container cleanup failed or already removed: %s", exc)
 
 
 def _run_host_sandboxed(
@@ -194,34 +317,56 @@ def _run_host_sandboxed(
     try:
         preexec = None
         if sys.platform.startswith("linux"):
-            preexec = _limit_resources_linux
+            preexec = _apply_resource_limits
 
-        proc = subprocess.run(  # nosec B603  # noqa: S603
+        proc = subprocess.Popen(  # nosec B603  # noqa: S603
             host_cmd,
-            capture_output=True,
+            stdout=subprocess.PIPE,
+            stderr=subprocess.PIPE,
             text=True,
-            check=False,
-            timeout=timeout,
             env=_sandbox_env(),
             preexec_fn=preexec,
             cwd=cwd,
         )
-        execution["stdout"] = proc.stdout or ""
-        execution["stderr"] = proc.stderr or ""
+
+        # On non-Linux platforms preexec_fn is unsupported; apply limits after start.
+        if not sys.platform.startswith("linux"):
+            if is_production():
+                raise RuntimeError(
+                    "Host execution is not allowed in production on non-Linux platforms. "
+                    "Use Docker sandboxing."
+                )
+            _logger.warning(
+                "Host fallback on non-Linux platform: POSIX rlimits are unavailable. "
+                "Applying best-effort psutil/win32job limits."
+            )
+            _apply_resource_limits_to_pid(proc.pid)
+
+        try:
+            stdout, stderr = proc.communicate(timeout=timeout)
+        except subprocess.TimeoutExpired:
+            with contextlib.suppress(Exception):
+                proc.kill()
+            stdout, stderr = proc.communicate()
+            execution["returncode"] = -1
+            execution["timed_out"] = True
+            execution["stdout"] = stdout or ""
+            execution["stderr"] = stderr or ""
+            execution["error"] = {
+                "type": "Timeout",
+                "message": "Program execution took too long and was stopped (possible infinite loop or heavy computation).",  # noqa: E501
+                "line": None,
+                "explanation": "The program did not finish within the allowed time limit.",
+                "suggestions": [
+                    "Check for infinite loops or very slow operations.",
+                    "Try running a smaller piece of the program or simplifying the logic.",
+                ],
+            }
+            return execution
+
+        execution["stdout"] = stdout or ""
+        execution["stderr"] = stderr or ""
         execution["returncode"] = proc.returncode
-    except subprocess.TimeoutExpired:
-        execution["returncode"] = -1
-        execution["timed_out"] = True
-        execution["error"] = {
-            "type": "Timeout",
-            "message": "Program execution took too long and was stopped (possible infinite loop or heavy computation).",  # noqa: E501
-            "line": None,
-            "explanation": "The program did not finish within the allowed time limit.",
-            "suggestions": [
-                "Check for infinite loops or very slow operations.",
-                "Try running a smaller piece of the program or simplifying the logic.",
-            ],
-        }
     except FileNotFoundError:
         execution["tool_missing"] = True
         execution["returncode"] = -1
@@ -314,6 +459,7 @@ def run_in_sandbox(  # noqa: C901, PLR0911, PLR0912, PLR0915
                 run_in_sandbox.last_result = execution
                 return execution
 
+            client = None
             try:
                 client = docker.from_env()
             except Exception as docker_err:  # noqa: BLE001
@@ -346,51 +492,43 @@ def run_in_sandbox(  # noqa: C901, PLR0911, PLR0912, PLR0915
                     stderr=True,
                     detach=True,
                     tmpfs={"/tmp": "rw,nosuid,size=128m"},  # noqa: S108
+                    labels={
+                        "ai-code-mentor.sandbox": "true",
+                        "ai-code-mentor.language": language_key,
+                    },
                 )
                 try:
-                    deadline = time.monotonic() + timeout_seconds
-                    timed_out = False
-                    while True:
-                        container.reload()
-                        state = (
-                            container.attrs.get("State", {})
-                            if isinstance(container.attrs, dict)
-                            else {}
-                        )
-                        if not state.get("Running", False):
-                            execution["returncode"] = int(state.get("ExitCode", 0) or 0)
-                            break
-                        if time.monotonic() >= deadline:
-                            timed_out = True
-                            with contextlib.suppress(APIError):
-                                container.kill()
-                            container.reload()
-                            state = (
-                                container.attrs.get("State", {})
-                                if isinstance(container.attrs, dict)
-                                else {}
-                            )
-                            execution["returncode"] = int(state.get("ExitCode", -1) or -1)
-                            execution["timed_out"] = True
-                            execution["error"] = {
-                                "type": "Timeout",
-                                "message": "Program execution took too long and was stopped (possible infinite loop or heavy computation).",  # noqa: E501
-                                "line": None,
-                                "explanation": "The program did not finish within the allowed time limit.",  # noqa: E501
-                                "suggestions": [
-                                    "Check for infinite loops or very slow operations.",
-                                    "Try running a smaller piece of the program or simplifying the logic.",  # noqa: E501
-                                ],
-                            }
-                            break
-                        time.sleep(0.1)
+                    try:
+                        exit_data = container.wait(timeout=timeout_seconds)
+                        execution["returncode"] = int(exit_data.get("StatusCode", 0))
+                    except (APIError, requests.exceptions.ReadTimeout):
+                        with contextlib.suppress(Exception):
+                            container.kill()
+                        try:
+                            exit_data = container.wait(timeout=5)
+                            execution["returncode"] = int(exit_data.get("StatusCode", -1))
+                        except Exception:  # noqa: BLE001
+                            execution["returncode"] = -1
+                        execution["timed_out"] = True
+                        execution["error"] = {
+                            "type": "Timeout",
+                            "message": "Program execution took too long and was stopped.",
+                            "line": None,
+                            "explanation": (
+                                "The program did not finish within the allowed time limit."
+                            ),
+                            "suggestions": [
+                                "Check for infinite loops or very slow operations.",
+                                "Try running a smaller piece of the program.",
+                            ],
+                        }
 
                     try:
-                        stdout_bytes = container.logs(stdout=True, stderr=False)
+                        stdout_bytes = container.logs(stdout=True, stderr=False) or b""
                     except APIError:
                         stdout_bytes = b""
                     try:
-                        stderr_bytes = container.logs(stdout=False, stderr=True)
+                        stderr_bytes = container.logs(stdout=False, stderr=True) or b""
                     except APIError:
                         stderr_bytes = b""
 
@@ -407,14 +545,14 @@ def run_in_sandbox(  # noqa: C901, PLR0911, PLR0912, PLR0915
 
                     execution["stdout"] = stdout_text
                     execution["stderr"] = stderr_text
-                    if execution["returncode"] == -1 and not timed_out:
+                    if execution["returncode"] == -1 and not execution.get("timed_out"):
                         execution["returncode"] = 0
 
                     return execution
                 finally:
-                    with contextlib.suppress(Exception):
-                        container.remove(force=True)
+                    _cleanup_container(container)
             except ContainerError as exc:
+                _cleanup_container(getattr(exc, "container", None))
                 stdout_text = ""
                 stderr_text = ""
                 if getattr(exc, "stdout", None) is not None:
@@ -446,10 +584,15 @@ def run_in_sandbox(  # noqa: C901, PLR0911, PLR0912, PLR0915
                 }
                 return execution
             except (APIError, DockerException) as exc:
+                _cleanup_container(container)
                 return _sandbox_unavailable_execution(
                     str(exc),
                     "Sandbox startup failed.",
                 )
+            finally:
+                if client is not None:
+                    with contextlib.suppress(Exception):
+                        client.close()
     except (APIError, DockerException) as exc:
         execution["stderr"] = str(exc)
         execution["error"] = {
@@ -1006,52 +1149,23 @@ def _analyze_javascript(
     return issues, execution
 
 
-def _parse_gcc_output(output: str, language_label: str) -> list[Issue]:
-    """
-    Parse GCC / G++ style diagnostics into Issue objects.
-    Example line: main.c:10:5: error: expected ';' before 'return'
-    """
-    issues: list[Issue] = []
+def _parse_compiler_output(output: str, label: str, pattern: re.Pattern[str]) -> list[Issue]:
+    """Parse GCC/Clang/javac-style diagnostics into Issue objects."""
     if not output:
-        return issues
-
-    pattern = re.compile(r"^(.*?):(\d+):\d*:\s*(warning|error):\s*(.*)$")
+        return []
+    issues = []
     for line in output.splitlines():
-        match = pattern.match(line.strip())
-        if not match:
+        m = pattern.match(line.strip())
+        if not m:
             continue
-        _file, line_str, level, msg = match.groups()
         try:
-            line_no = int(line_str)
-        except ValueError:
+            line_no = int(m.group(2))
+        except (ValueError, IndexError):
             line_no = 1
+        level = m.group(3) if m.lastindex >= 3 else "error"  # noqa: PLR2004
+        msg = m.group(4) if m.lastindex >= 4 else m.group(0)  # noqa: PLR2004
         severity = "warning" if level == "warning" else "error"
-        code = f"{language_label.upper()}_{level.upper()}"
-        issues.append(Issue(line=line_no, severity=severity, code=code, message=msg.strip()))
-    return issues
-
-
-def _parse_java_compile_output(output: str) -> list[Issue]:
-    """
-    Parse javac diagnostics like:
-      Main.java:10: error: ';' expected
-    """
-    issues: list[Issue] = []
-    if not output:
-        return issues
-
-    pattern = re.compile(r"^(.*?):(\d+):\s*(warning|error):\s*(.*)$")
-    for line in output.splitlines():
-        match = pattern.match(line.strip())
-        if not match:
-            continue
-        _file, line_str, level, msg = match.groups()
-        try:
-            line_no = int(line_str)
-        except ValueError:
-            line_no = 1
-        severity = "warning" if level == "warning" else "error"
-        code = f"JAVA_{level.upper()}"
+        code = f"{label}_{level.upper()}"
         issues.append(Issue(line=line_no, severity=severity, code=code, message=msg.strip()))
     return issues
 
@@ -1135,7 +1249,8 @@ def _run_gcc(
     )
 
     if execution["returncode"] != 0 and not execution["error"] and execution.get("stderr"):
-            parsed = _parse_gcc_output(execution["stderr"], language_label)
+            _gcc_re = re.compile(r"^(.*?):(\d+):\d*:\s*(warning|error):\s*(.*)$")
+            parsed = _parse_compiler_output(execution["stderr"], language_label.upper(), _gcc_re)
             if parsed:
                 compile_issues.extend(parsed)
                 execution["error"] = {
@@ -1198,7 +1313,8 @@ def _analyze_java(code: str, _timeout: float = 3.0) -> tuple[list[Issue], dict[s
     if execution["returncode"] != 0:
         stderr = execution.get("stderr", "")
         if not execution["error"] and stderr:
-            parsed = _parse_java_compile_output(stderr)
+            _javac_re = re.compile(r"^(.*?):(\d+):\s*(warning|error):\s*(.*)$")
+            parsed = _parse_compiler_output(stderr, "JAVA", _javac_re)
             if parsed:
                 compile_issues.extend(parsed)
                 execution["error"] = {
@@ -1317,6 +1433,11 @@ def _ai_mentor_status_from_feedback(feedback: str) -> str:
 
 MAX_GLOBAL_AI_CALLS_PER_DAY = int(os.environ.get("MAX_GLOBAL_AI_CALLS_PER_DAY", "5000"))
 
+AI_METRICS: dict = {
+    "calls_made": 0,
+    "tokens_used": 0,
+}
+
 _AI_QUOTA_REDIS_PREFIX = "ai_quota:"
 
 
@@ -1324,46 +1445,80 @@ def _ai_quota_redis_key() -> str:
     return f"{_AI_QUOTA_REDIS_PREFIX}{time.strftime('%Y-%m-%d')}"
 
 
-def _check_ai_quota() -> bool:
-    """Return True if the global daily AI quota has been reached."""
+def _check_and_increment_ai_quota() -> bool:
+    """Atomically check and increment the daily AI quota.
+
+    Uses Redis INCR + EXPIREAT via a pipeline when available; otherwise falls
+    back to an in-memory counter. The key expires at midnight UTC. Returns
+    True if the quota is exceeded.
+    """
     client = None
     try:
-        from app_pkg.extensions import get_redis_client  # noqa: PLC0415
-        client = get_redis_client()
+        from app_pkg.extensions import require_redis_client  # noqa: PLC0415
+        client = require_redis_client()
     except ImportError:
         client = None
 
     if client is not None:
         key = _ai_quota_redis_key()
-        value = client.get(key)
-        return value is not None and int(value) >= MAX_GLOBAL_AI_CALLS_PER_DAY
-
-    return SECURITY_METRICS.get("ai_mentor_calls_made", 0) >= MAX_GLOBAL_AI_CALLS_PER_DAY
-
-
-def _increment_ai_quota() -> None:
-    """Increment the daily AI call counter. Uses Redis when available."""
-    client = None
-    try:
-        from app_pkg.extensions import get_redis_client  # noqa: PLC0415
-        client = get_redis_client()
-    except ImportError:
-        client = None
-
-    if client is not None:
-        key = _ai_quota_redis_key()
+        end_of_day_utc = datetime.combine(
+            date.today(), dt_time.max, tzinfo=timezone.utc
+        )
         pipe = client.pipeline()
         pipe.incr(key)
-        pipe.expire(key, 86400)
-        pipe.execute()
-    else:
-        SECURITY_METRICS["ai_mentor_calls_made"] = (
-            SECURITY_METRICS.get("ai_mentor_calls_made", 0) + 1
-        )
+        pipe.expireat(key, int(end_of_day_utc.timestamp()))
+        results = pipe.execute()
+        new_count = int(results[0])
+        return new_count > MAX_GLOBAL_AI_CALLS_PER_DAY
+
+    # In-memory fallback for dev/testing without Redis.
+    current = AI_METRICS.get("calls_made", 0)
+    if current >= MAX_GLOBAL_AI_CALLS_PER_DAY:
+        return True
+    AI_METRICS["calls_made"] = current + 1
+    return False
 
 
 _AI_MENTOR_CACHE: OrderedDict = OrderedDict()
 _AI_MENTOR_CACHE_SIZE = 500
+_AI_MENTOR_CACHE_TTL_SECONDS = 3600
+
+
+def _get_cached_mentorship(cache_key: str) -> str | None:
+    """Return cached AI mentorship feedback, or None if not cached."""
+    client = None
+    try:
+        from app_pkg.extensions import require_redis_client  # noqa: PLC0415
+        client = require_redis_client()
+    except ImportError:
+        client = None
+
+    if client is not None:
+        return client.get(f"ai_mentor_cache:{cache_key}")
+
+    return _AI_MENTOR_CACHE.get(cache_key)
+
+
+def _set_cached_mentorship(cache_key: str, feedback: str) -> None:
+    """Cache AI mentorship feedback with a 1-hour TTL when Redis is available."""
+    client = None
+    try:
+        from app_pkg.extensions import require_redis_client  # noqa: PLC0415
+        client = require_redis_client()
+    except ImportError:
+        client = None
+
+    if client is not None:
+        client.setex(
+            f"ai_mentor_cache:{cache_key}",
+            _AI_MENTOR_CACHE_TTL_SECONDS,
+            feedback,
+        )
+        return
+
+    _AI_MENTOR_CACHE[cache_key] = feedback
+    if len(_AI_MENTOR_CACHE) > _AI_MENTOR_CACHE_SIZE:
+        _AI_MENTOR_CACHE.popitem(last=False)
 
 _logger = logging.getLogger("app_pkg")
 
@@ -1476,129 +1631,141 @@ def _build_error_context(execution: dict, issues: list[dict]) -> tuple[str, list
     return ctx, all_errors
 
 
-async def _get_ai_mentorship(  # noqa: C901, PLR0911, PLR0912, PLR0915
+_GEMINI_BREAKER = GeminiCircuitBreaker()
+
+
+def _gemini_breaker() -> GeminiCircuitBreaker:
+    """Return the shared Gemini circuit breaker instance."""
+    return _GEMINI_BREAKER
+
+
+def _get_ai_mentorship(  # noqa: C901, PLR0911, PLR0912, PLR0915
     code: str,
     language: str,
     execution: dict,
     issues: list[dict],
     difficulty: str = "beginner",
 ) -> str:
-    if _check_ai_quota():
+    if _check_and_increment_ai_quota():
         return "AI_MENTOR_QUOTA_EXCEEDED"
 
     api_key = _get_valid_gemini_api_key()
     if not api_key:
         return "AI_MENTOR_DISABLED"
 
+    breaker = _gemini_breaker()
+    if not breaker.can_call():
+        _logger.warning("Gemini circuit breaker is OPEN; skipping API call.")
+        return "AI_MENTOR_API_ERROR"
+
     try:
         error_context, all_errors = _build_error_context(execution, issues)
 
-        if all_errors or error_context:
-            cache_key_str = f"{code[:MAX_AI_CODE_CHARS]}:{language}:{difficulty}:{error_context}"
-            cache_key = hashlib.sha256(cache_key_str.encode("utf-8")).hexdigest()
-            if cache_key in _AI_MENTOR_CACHE:
-                res = _AI_MENTOR_CACHE.pop(cache_key)
-                _AI_MENTOR_CACHE[cache_key] = res
-                return res
+        if not all_errors and not error_context:
+            return "LOOKS_GOOD"
 
-            prompt = _build_mentor_prompt(code, language, difficulty, error_context)
+        cache_key_str = f"{code[:MAX_AI_CODE_CHARS]}:{language}:{difficulty}:{error_context}"
+        cache_key = hashlib.sha256(cache_key_str.encode("utf-8")).hexdigest()
+        cached = _get_cached_mentorship(cache_key)
+        if cached:
+            return cached
 
-            gemini_model = (os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash").strip()
-            endpoint = (
-                "https://generativelanguage.googleapis.com/v1beta/"
-                f"models/{urllib.parse.quote_plus(gemini_model)}:generateContent"
-            )
-            payload = {
-                "contents": [
-                    {
-                        "parts": [
-                            {
-                                "text": prompt,
-                            },
-                        ],
-                    },
-                ],
-            }
+        prompt = _build_mentor_prompt(code, language, difficulty, error_context)
 
-            _increment_ai_quota()
-
-            _max_retries = 3
-            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
-                for _attempt in range(_max_retries):
-                    try:
-                        response = await client.post(
-                            endpoint, json=payload, headers={"X-Goog-Api-Key": api_key},
-                        )
-                        status_code = response.status_code
-                        raw_body = response.text
-                        if status_code == 429 and _attempt < _max_retries - 1:  # noqa: PLR2004
-                            backoff = 2**_attempt
-                            _logger.warning(
-                                "Gemini rate limited (429). Retrying in %ds...", backoff
-                            )
-                            await asyncio.sleep(backoff)
-                            continue
-                        break
-                    except httpx.RequestError:
-                        _logger.exception("Gemini network error")
-                        return "AI_MENTOR_API_ERROR"
-
-            if status_code < 200 or status_code >= 300:  # noqa: PLR2004
-                _logger.error("Gemini unexpected status: %s", status_code)
-                return _map_gemini_http_error(status_code, raw_body, "")
-
-            try:
-                parsed = json.loads(raw_body)
-            except json.JSONDecodeError:
-                preview = raw_body[:180].replace("\n", " ")
-                _logger.exception("Gemini JSON decode failed. body_preview=%s", preview)
-                return "AI_MENTOR_BAD_RESPONSE"
-
-            feedback_text = _extract_gemini_text(parsed)
-
-            # Usage tracking (Quota Management)
-            try:
-                usage = parsed.get("usageMetadata", {})
-                if usage:
-                    total_tokens = int(usage.get("totalTokenCount", 0))
-                    SECURITY_METRICS["ai_mentor_tokens_used"] = (
-                        SECURITY_METRICS.get("ai_mentor_tokens_used", 0) + total_tokens
-                    )
-                    _logger.info(
-                        "gemini_api_usage",
-                        extra={
-                            "prompt_tokens": usage.get("promptTokenCount", 0),
-                            "candidates_tokens": usage.get("candidatesTokenCount", 0),
-                            "total_tokens": total_tokens,
+        gemini_model = (os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash").strip()
+        endpoint = (
+            "https://generativelanguage.googleapis.com/v1beta/"
+            f"models/{urllib.parse.quote_plus(gemini_model)}:generateContent"
+        )
+        payload = {
+            "contents": [
+                {
+                    "parts": [
+                        {
+                            "text": prompt,
                         },
+                    ],
+                },
+            ],
+        }
+
+        _max_retries = 3
+        with httpx.Client(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
+            for _attempt in range(_max_retries):
+                try:
+                    response = client.post(
+                        endpoint, json=payload, headers={"X-Goog-Api-Key": api_key},
                     )
-            except (KeyError, TypeError, AttributeError) as e:
-                _logger.warning("Failed to parse usageMetadata", exc_info=e)
+                    status_code = response.status_code
+                    raw_body = response.text
+                    if status_code == 429 and _attempt < _max_retries - 1:  # noqa: PLR2004
+                        backoff = 2**_attempt
+                        _logger.warning(
+                            "Gemini rate limited (429). Retrying in %ds...", backoff
+                        )
+                        time.sleep(backoff)
+                        continue
+                    break
+                except httpx.RequestError as exc:
+                    _logger.exception("Gemini network error")
+                    breaker.record_failure()
+                    return "AI_MENTOR_API_ERROR"
 
-            if feedback_text:
-                # Store in LRU cache
-                _AI_MENTOR_CACHE[cache_key] = feedback_text
-                if len(_AI_MENTOR_CACHE) > _AI_MENTOR_CACHE_SIZE:
-                    _AI_MENTOR_CACHE.popitem(last=False)
-                return feedback_text
+        if status_code < 200 or status_code >= 300:  # noqa: PLR2004
+            _logger.error("Gemini unexpected status: %s", status_code)
+            breaker.record_failure()
+            return _map_gemini_http_error(status_code, raw_body, "")
 
+        breaker.record_success()
+
+        try:
+            parsed = json.loads(raw_body)
+        except json.JSONDecodeError:
+            preview = raw_body[:180].replace("\n", " ")
+            _logger.exception("Gemini JSON decode failed. body_preview=%s", preview)
             return "AI_MENTOR_BAD_RESPONSE"
+
+        feedback_text = _extract_gemini_text(parsed)
+
+        # Usage tracking (Quota Management)
+        try:
+            usage = parsed.get("usageMetadata", {})
+            if usage:
+                total_tokens = int(usage.get("totalTokenCount", 0))
+                AI_METRICS["tokens_used"] = (
+                    AI_METRICS.get("tokens_used", 0) + total_tokens
+                )
+                _logger.info(
+                    "gemini_api_usage",
+                    extra={
+                        "prompt_tokens": usage.get("promptTokenCount", 0),
+                        "candidates_tokens": usage.get("candidatesTokenCount", 0),
+                        "total_tokens": total_tokens,
+                    },
+                )
+        except (KeyError, TypeError, AttributeError) as e:
+            _logger.warning("Failed to parse usageMetadata", exc_info=e)
+
+        if feedback_text:
+            _set_cached_mentorship(cache_key, feedback_text)
+            return feedback_text
+
+        return "AI_MENTOR_BAD_RESPONSE"
     except Exception as exc:
         _logger.exception(
             "Unexpected Gemini error type=%s", type(exc).__name__
         )
+        breaker.record_failure()
         return "AI_MENTOR_API_ERROR"
-    return "LOOKS_GOOD"
 
 
-async def analyze_code(  # noqa: C901
+def analyze_code(  # noqa: C901
     code: str,
     language: str = "python",
     difficulty: str = "beginner",
 ) -> dict[str, Any]:
     """
     Analyze source code and return a structured result.
-    Runs subprocess execute functions in an isolated thread.
 
     Args:
         code: The source code to analyze
@@ -1648,19 +1815,19 @@ async def analyze_code(  # noqa: C901
     lines = code.splitlines()
 
     if language == "python":
-        issues, execution = await asyncio.to_thread(_analyze_python, code, difficulty)
+        issues, execution = _analyze_python(code, difficulty)
     elif language in {"javascript", "js"}:
         language = "javascript"
-        issues, execution = await asyncio.to_thread(_analyze_javascript, code, difficulty)
+        issues, execution = _analyze_javascript(code, difficulty)
     elif language == "java":
-        issues, execution = await asyncio.to_thread(_analyze_java, code)
+        issues, execution = _analyze_java(code)
     elif language == "c":
-        issues, execution = await asyncio.to_thread(_analyze_c, code)
+        issues, execution = _analyze_c(code)
     elif language in {"cpp", "c++"}:
         language = "cpp"
-        issues, execution = await asyncio.to_thread(_analyze_cpp, code)
+        issues, execution = _analyze_cpp(code)
     else:
-        issues, execution = await asyncio.to_thread(_analyze_language_not_yet_supported, language)
+        issues, execution = _analyze_language_not_yet_supported(language)
 
     issues_dicts = [
         {"line": i.line, "severity": i.severity, "code": i.code, "message": i.message}
@@ -1671,7 +1838,7 @@ async def analyze_code(  # noqa: C901
     if execution is None:
         execution = _empty_execution()
 
-    ai_mentor_feedback = await _get_ai_mentorship(
+    ai_mentor_feedback = _get_ai_mentorship(
         code,
         language,
         execution,

@@ -30,9 +30,42 @@ SECURITY_METRICS: dict = {
     "abuse_pattern_rejections": 0,
     "concurrency_rejections": 0,
     "sandbox_failures": 0,
-    "ai_mentor_calls_made": 0,
-    "ai_mentor_tokens_used": 0,
 }
+
+
+_SECURITY_METRIC_TTL_SECONDS = 30 * 86400
+
+
+def increment_security_metric(name: str) -> None:
+    """Increment a security metric counter using Redis when available."""
+    client = None
+    try:
+        from app_pkg.extensions import require_redis_client  # noqa: PLC0415
+        client = require_redis_client()
+    except ImportError:
+        client = None
+
+    if client is not None:
+        key = f"security_metrics:{name}"
+        client.incr(key)
+        client.expire(key, _SECURITY_METRIC_TTL_SECONDS)
+    else:
+        SECURITY_METRICS[name] = SECURITY_METRICS.get(name, 0) + 1
+
+
+def get_security_metric(name: str) -> int:
+    """Return the current value of a security metric counter."""
+    client = None
+    try:
+        from app_pkg.extensions import require_redis_client  # noqa: PLC0415
+        client = require_redis_client()
+    except ImportError:
+        client = None
+
+    if client is not None:
+        value = client.get(f"security_metrics:{name}")
+        return int(value) if value else 0
+    return SECURITY_METRICS.get(name, 0)
 
 
 # ---------------------------------------------------------------------------
@@ -107,7 +140,7 @@ def init_security(app) -> None:
 
         ua = request.headers.get("User-Agent", "").strip()
         if not ua or _BOT_UA_RE.search(ua):
-            SECURITY_METRICS["blocked_automated_clients"] += 1
+            increment_security_metric("blocked_automated_clients")
             app.logger.warning(
                 "Blocked automated client: UA=%r path=%s addr=%s",
                 ua,

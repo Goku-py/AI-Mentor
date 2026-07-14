@@ -30,7 +30,7 @@ COPY requirements.lock ./
 RUN pip install --no-cache-dir -r requirements.lock
 
 # Copy core files
-COPY app.py analyzer.py ./
+COPY app.py analyzer.py worker.py ./
 COPY app_pkg/ app_pkg/
 COPY models_pkg/ models_pkg/
 COPY migrations/ migrations/

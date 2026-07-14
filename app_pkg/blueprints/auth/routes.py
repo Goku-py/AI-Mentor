@@ -14,7 +14,7 @@ import os
 import re
 import secrets
 from datetime import UTC, datetime, timedelta
-from urllib.parse import quote_plus, urlparse
+from urllib.parse import quote_plus
 
 import requests
 from flask import (
@@ -36,13 +36,46 @@ from flask_jwt_extended import (
     unset_jwt_cookies,
 )
 
-from app_pkg.extensions import csrf, jwt_blacklist_add, limiter
-from app_pkg.utils import coerce_jwt_identity
+from app_pkg.extensions import csrf, jwt_blacklist_add, limiter, require_redis_client
+from app_pkg.utils import allowed_origins, coerce_jwt_identity
 from models_pkg import User, db
 
 auth_bp = Blueprint("auth", __name__, url_prefix="/api/v1/auth")
 
 _EMAIL_RE = re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")
+
+
+_OAUTH_STATE_TTL_SECONDS = 300
+
+
+def _store_oauth_state(state: str) -> None:
+    """Store OAuth state in Redis with a short TTL; fall back to Flask session."""
+    redis = require_redis_client()
+    if redis is None:
+        # Dev/testing fallback when Redis is unavailable.
+        session["github_oauth_state"] = state
+        return
+    redis.setex(f"oauth_state:{state}", _OAUTH_STATE_TTL_SECONDS, "1")
+
+
+def _consume_oauth_state(state: str) -> str | None:
+    """Retrieve and delete the stored OAuth state, falling back to the session."""
+    redis = require_redis_client()
+    if redis is None:
+        # Dev/testing fallback when Redis is unavailable.
+        return session.pop("github_oauth_state", None)
+    key = f"oauth_state:{state}"
+    if redis.get(key):
+        redis.delete(key)
+        return state
+    return None
+
+
+def _frontend_origin() -> str:
+    origins = allowed_origins()
+    if isinstance(origins, list) and origins:
+        return origins[0]
+    return "http://localhost:5173"
 
 
 def _validate_email(email: str) -> str | None:
@@ -70,18 +103,6 @@ def _make_tokens(user: User) -> tuple[str, str]:
     access_token = create_access_token(identity=str(user.id), additional_claims=additional_claims)
     refresh_token = create_refresh_token(identity=str(user.id))
     return access_token, refresh_token
-
-
-def _allowed_frontend_origin() -> str:
-    raw_origins = os.environ.get("ALLOWED_ORIGINS", "").split(",")
-    for origin in raw_origins:
-        candidate = origin.strip()
-        if not candidate or candidate == "*":
-            continue
-        parsed = urlparse(candidate)
-        if parsed.scheme in {"http", "https"} and parsed.netloc:
-            return f"{parsed.scheme}://{parsed.netloc}"
-    return "http://localhost:5173"
 
 
 @auth_bp.route("/register", methods=["POST"])
@@ -214,7 +235,7 @@ def github_login():
         return jsonify({"ok": False, "error": "GitHub OAuth not configured."}), 501
 
     state = secrets.token_urlsafe(32)
-    session["github_oauth_state"] = state
+    _store_oauth_state(state)
 
     redirect_uri = request.host_url.rstrip("/") + "/api/v1/auth/github/callback"
     github_auth_url = (
@@ -303,7 +324,7 @@ def github_callback():  # noqa: PLR0911
     if not code:
         return jsonify({"ok": False, "error": "No code provided by GitHub."}), 400
 
-    expected_state = session.pop("github_oauth_state", None)
+    expected_state = _consume_oauth_state(state or "")
     if not expected_state or not secrets.compare_digest(state or "", expected_state):
         return jsonify({"ok": False, "error": "Invalid OAuth state."}), 400
 
@@ -332,7 +353,7 @@ def github_callback():  # noqa: PLR0911
         return jsonify({"ok": False, "error": "Account is disabled."}), 403
 
     _, jwt_refresh = _make_tokens(user)
-    frontend_url = _allowed_frontend_origin()
+    frontend_url = _frontend_origin()
     response = make_response(redirect(frontend_url))
     set_refresh_cookies(response, jwt_refresh)
     return response

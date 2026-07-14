@@ -5,8 +5,11 @@ Run with: python -m pytest tests/test_api.py -v
 """
 
 import json
+import time
 
 import pytest
+
+from app_pkg.blueprints.api import routes as api_routes
 
 # client and auth_headers fixtures are provided by tests/conftest.py
 
@@ -49,6 +52,42 @@ class TestToolsEndpoint:
         data = json.loads(response.data)
         assert "available" in data
         assert "message" in data
+
+    def test_tools_cache_refresh_after_ttl(self, client, monkeypatch):
+        """Cached tools should refresh after the TTL expires."""
+        # Start with a clean module-level cache.
+        monkeypatch.setattr(api_routes, "_TOOLS_CACHE", None)
+        monkeypatch.setattr(api_routes, "_TOOLS_CACHE_TIME", 0.0)
+
+        call_count = 0
+        fake_time = [0.0]
+
+        def fake_verify_tools():
+            nonlocal call_count
+            call_count += 1
+            return {"python": call_count == 1, "javascript": True}
+
+        monkeypatch.setattr(api_routes, "verify_tools", fake_verify_tools)
+        monkeypatch.setattr(api_routes.time, "monotonic", lambda: fake_time[0])
+
+        # First call should invoke verify_tools.
+        response = client.get("/api/v1/tools")
+        assert response.status_code == 200
+        data = response.get_json()
+        assert data["available"]["python"] is True
+        assert call_count == 1
+
+        # Immediately subsequent call should be served from cache.
+        response = client.get("/api/v1/tools")
+        assert response.get_json()["available"]["python"] is True
+        assert call_count == 1
+
+        # Advance time past the TTL; next call should refresh.
+        fake_time[0] = api_routes._TOOLS_CACHE_TTL_SECONDS + 1  # noqa: SLF001
+        response = client.get("/api/v1/tools")
+        data = response.get_json()
+        assert data["available"]["python"] is False
+        assert call_count == 2
 
 
 class TestAnalyzeEndpoint:
@@ -328,6 +367,63 @@ class TestDebugSecurityEndpoints:
         data = json.loads(response.data)
         assert "status" in data
         assert "mode" in data
+
+
+class TestAuditLogging:
+    """Audit logging must not block the /analyze response."""
+
+    def test_analyze_response_not_blocked_by_audit_log(self, client, monkeypatch):
+        """A slow audit-log DB write must not delay the HTTP response."""
+        # Force the async path even though the test app has TESTING=True.
+        monkeypatch.setattr(
+            api_routes, "_write_audit_log", api_routes._write_audit_log_async  # noqa: SLF001
+        )
+
+        original_sync = api_routes._write_audit_log_sync  # noqa: SLF001
+
+        def slow_sync(user_id, language, code, *, had_error):
+            time.sleep(0.5)
+            return original_sync(user_id, language, code, had_error=had_error)
+
+        monkeypatch.setattr(api_routes, "_write_audit_log_sync", slow_sync)
+
+        payload = json.dumps({"code": 'print("hello")', "language": "python"})
+        start = time.monotonic()
+        response = client.post(
+            "/api/v1/analyze",
+            data=payload,
+            content_type="application/json",
+        )
+        elapsed = time.monotonic() - start
+
+        assert response.status_code == 200
+        # The response must return well before the 0.5s audit-log sleep finishes.
+        assert elapsed < 0.4
+
+    def test_write_audit_log_async_spawns_background_thread(self, client, monkeypatch):
+        """_write_audit_log_async should spawn a daemon thread with an app context."""
+        calls = []
+
+        class FakeThread:
+            def __init__(self, target, args=(), kwargs=None, *, daemon=None):
+                self._target = target
+                self._args = args
+                self._kwargs = kwargs or {}
+                self._daemon = daemon
+
+            def start(self):
+                calls.append((self._target, self._args, self._kwargs, self._daemon))
+
+        monkeypatch.setattr(api_routes.threading, "Thread", FakeThread)
+
+        with client.application.app_context():
+            api_routes._write_audit_log_async(1, "python", "x = 1", had_error=False)  # noqa: SLF001
+
+        assert len(calls) == 1
+        target, args, kwargs, daemon = calls[0]
+        assert daemon is True
+        # The target, when invoked, pushes an app context and writes synchronously.
+        target(*args, **kwargs)
 
 
 if __name__ == "__main__":

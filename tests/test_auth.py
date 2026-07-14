@@ -12,6 +12,7 @@ The 'client' fixture is provided by tests/conftest.py (DB in-memory, CSRF off).
 """
 
 from unittest.mock import Mock, patch
+from urllib.parse import unquote_plus
 
 import requests
 
@@ -322,3 +323,129 @@ class TestGithubOAuth:
         assert location == "http://localhost:5173"
         assert "token=" not in location
         assert "refresh_token_cookie" in r.headers.get("Set-Cookie", "")
+
+    def test_github_login_stores_state_in_redis_when_available(self, client, monkeypatch):
+        """OAuth state should be stored in Redis with a 5-minute TTL when Redis is up."""
+        monkeypatch.setenv("GITHUB_CLIENT_ID", "client-123")
+        fake_redis = Mock()
+        fake_redis.setex = Mock()
+
+        with patch(
+            "app_pkg.blueprints.auth.routes.require_redis_client",
+            return_value=fake_redis,
+        ):
+            r = client.get("/api/v1/auth/github/login")
+
+        assert r.status_code == 302
+        # Extract the state query parameter from the redirect URL and decode it.
+        location = r.headers.get("Location", "")
+        query_params = dict(
+            part.split("=")
+            for part in location.split("?")[-1].split("&")
+            if "=" in part
+        )
+        encoded_state = query_params.get("state")
+        assert encoded_state
+        state = unquote_plus(encoded_state)
+        fake_redis.setex.assert_called_once_with(
+            f"oauth_state:{state}",
+            300,
+            "1",
+        )
+        # Session fallback should not be used when Redis is available.
+        with client.session_transaction() as sess:
+            assert sess.get("github_oauth_state") is None
+
+    def test_github_login_falls_back_to_session_when_redis_unavailable(self, client, monkeypatch):
+        """OAuth state should fall back to Flask session when Redis is unavailable."""
+        monkeypatch.setenv("GITHUB_CLIENT_ID", "client-123")
+
+        with patch(
+            "app_pkg.blueprints.auth.routes.require_redis_client",
+            return_value=None,
+        ):
+            r = client.get("/api/v1/auth/github/login")
+
+        assert r.status_code == 302
+        with client.session_transaction() as sess:
+            assert sess.get("github_oauth_state")
+
+    def test_github_callback_consumes_state_from_redis(self, client, monkeypatch):
+        """Callback should retrieve and delete the state from Redis when available."""
+        monkeypatch.setenv("GITHUB_CLIENT_ID", "client-123")
+        monkeypatch.setenv("GITHUB_CLIENT_SECRET", "secret-123")
+        monkeypatch.setenv("ALLOWED_ORIGINS", "http://localhost:5173")
+
+        fake_redis = Mock()
+        fake_redis.get = Mock(return_value="1")
+        fake_redis.delete = Mock()
+
+        token_resp = Mock()
+        token_resp.ok = True
+        token_resp.json.return_value = {"access_token": "gh-access"}
+
+        user_resp = Mock()
+        user_resp.ok = True
+        user_resp.json.return_value = {"id": 98765, "email": "oauth@example.local"}
+
+        emails_resp = Mock()
+        emails_resp.ok = True
+        emails_resp.json.return_value = [{"email": "oauth@example.local", "primary": True}]
+
+        with (
+            patch(
+                "app_pkg.blueprints.auth.routes.require_redis_client",
+                return_value=fake_redis,
+            ),
+            patch("app_pkg.blueprints.auth.routes.requests.post", return_value=token_resp),
+            patch(
+                "app_pkg.blueprints.auth.routes.requests.get",
+                side_effect=[user_resp, emails_resp],
+            ),
+        ):
+            r = client.get("/api/v1/auth/github/callback?code=abc&state=expected-state")
+
+        assert r.status_code == 302
+        fake_redis.get.assert_called_once_with("oauth_state:expected-state")
+        fake_redis.delete.assert_called_once_with("oauth_state:expected-state")
+
+    def test_github_callback_falls_back_to_session_when_redis_unavailable(
+        self, client, monkeypatch
+    ):
+        """Callback should fall back to session state verification when Redis is unavailable."""
+        monkeypatch.setenv("GITHUB_CLIENT_ID", "client-123")
+        monkeypatch.setenv("GITHUB_CLIENT_SECRET", "secret-123")
+        monkeypatch.setenv("ALLOWED_ORIGINS", "http://localhost:5173")
+
+        with client.session_transaction() as sess:
+            sess["github_oauth_state"] = "expected-state"
+
+        token_resp = Mock()
+        token_resp.ok = True
+        token_resp.json.return_value = {"access_token": "gh-access"}
+
+        user_resp = Mock()
+        user_resp.ok = True
+        user_resp.json.return_value = {"id": 98765, "email": "oauth@example.local"}
+
+        emails_resp = Mock()
+        emails_resp.ok = True
+        emails_resp.json.return_value = [{"email": "oauth@example.local", "primary": True}]
+
+        with (
+            patch(
+                "app_pkg.blueprints.auth.routes.require_redis_client",
+                return_value=None,
+            ),
+            patch("app_pkg.blueprints.auth.routes.requests.post", return_value=token_resp),
+            patch(
+                "app_pkg.blueprints.auth.routes.requests.get",
+                side_effect=[user_resp, emails_resp],
+            ),
+        ):
+            r = client.get("/api/v1/auth/github/callback?code=abc&state=expected-state")
+
+        assert r.status_code == 302
+        # State should have been consumed from the session.
+        with client.session_transaction() as sess:
+            assert sess.get("github_oauth_state") is None

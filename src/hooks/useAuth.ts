@@ -25,6 +25,7 @@ export interface UseAuthReturn {
   handleAuthSubmit: (e: React.FormEvent) => Promise<void>;
   handleLogout: () => Promise<void>;
   tryRefreshToken: () => Promise<string | null>;
+  refreshCsrfToken: () => Promise<string>;
   handleUnauthenticated: () => void;
 }
 
@@ -61,6 +62,12 @@ export function useAuth(): UseAuthReturn {
   const tryRefreshToken = useCallback(async (): Promise<string | null> => {
     const token = await apiTryRefresh();
     if (token) setAccessToken(token);
+    return token;
+  }, []);
+
+  const refreshCsrfToken = useCallback(async (): Promise<string> => {
+    const token = await fetchCsrfToken();
+    setCsrfToken(token);
     return token;
   }, []);
 
@@ -140,6 +147,7 @@ export function useAuth(): UseAuthReturn {
     handleAuthSubmit,
     handleLogout,
     tryRefreshToken,
+    refreshCsrfToken,
     handleUnauthenticated,
   };
 }

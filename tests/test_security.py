@@ -12,6 +12,8 @@ The 'client' fixture is provided by tests/conftest.py.
 """
 
 
+import fakeredis
+
 # ---------------------------------------------------------------------------
 # Helpers
 # ---------------------------------------------------------------------------
@@ -192,6 +194,18 @@ class TestDebugEndpointSecurity:
         monkeypatch.setenv("JWT_SECRET_KEY", "test-jwt-secret-32-chars-min-for-pro")
         monkeypatch.setenv("ALLOWED_ORIGINS", "http://localhost:5173")
         monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost:5432/test")
+        monkeypatch.setenv("REDIS_URL", "redis://localhost:6379")
+        monkeypatch.setenv("RATE_LIMIT_STORAGE_URI", "redis://localhost:6379/0")
+        monkeypatch.setenv("JWT_BLACKLIST_STORAGE_URI", "redis://localhost:6379/1")
+
+        # The production startup check requires Docker; mock it as available.
+        monkeypatch.setattr(
+            "analyzer.sandbox_runtime_status",
+            lambda: {"ok": True, "mode": "docker", "reason": ""},
+        )
+
+        # The production startup check pings Redis; mock it as reachable.
+        monkeypatch.setattr("app_pkg.ping_redis", lambda: True)
 
         from app_pkg import create_app  # noqa: PLC0415
         app = create_app("production")
@@ -203,6 +217,39 @@ class TestDebugEndpointSecurity:
             assert r.status_code == 404, (
                 f"Debug endpoints must be disabled in production, got {r.status_code}"
             )
+
+
+# ---------------------------------------------------------------------------
+# Shared security metrics (Phase 2)
+# ---------------------------------------------------------------------------
+class TestSecurityMetrics:
+    """Security metric counters are shared via Redis when available."""
+
+    def test_increment_and_get_metric_uses_redis(self, monkeypatch):
+        fake = fakeredis.FakeRedis(decode_responses=True)
+        monkeypatch.setattr("app_pkg.extensions.get_redis_client", lambda: fake)
+
+        from app_pkg.security.middleware import (
+            get_security_metric,
+            increment_security_metric,
+        )
+
+        increment_security_metric("auth_failures")
+        increment_security_metric("auth_failures")
+        assert get_security_metric("auth_failures") == 2
+
+    def test_get_metric_in_memory_fallback(self, monkeypatch):
+        monkeypatch.setattr("app_pkg.extensions.get_redis_client", lambda: None)
+
+        from app_pkg.security.middleware import (
+            SECURITY_METRICS,
+            get_security_metric,
+            increment_security_metric,
+        )
+
+        SECURITY_METRICS["auth_failures"] = 0
+        increment_security_metric("auth_failures")
+        assert get_security_metric("auth_failures") == 1
 
 
 # ---------------------------------------------------------------------------
@@ -222,8 +269,8 @@ class TestHostExecution:
 
         assert analyzer._host_execution_allowed() is True  # noqa: SLF001
 
-    def test_host_execution_enabled_in_production_with_flag(self, monkeypatch):
-        """HOST_EXECUTION_ENABLED=1 enables host execution even in production."""
+    def test_host_execution_disabled_in_production_with_flag(self, monkeypatch):
+        """HOST_EXECUTION_ENABLED=1 must NOT enable host execution in production."""
         monkeypatch.setenv("FLASK_ENV", "production")
         monkeypatch.setenv("HOST_EXECUTION_ENABLED", "1")
 
@@ -232,7 +279,7 @@ class TestHostExecution:
         import analyzer  # noqa: PLC0415
         importlib.reload(analyzer)
 
-        assert analyzer._host_execution_allowed() is True  # noqa: SLF001
+        assert analyzer._host_execution_allowed() is False  # noqa: SLF001
 
     def test_host_execution_disabled_without_flag(self, monkeypatch):
         """Without HOST_EXECUTION_ENABLED=1, host execution must be disabled."""

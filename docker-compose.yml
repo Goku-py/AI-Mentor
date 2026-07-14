@@ -1,0 +1,72 @@
+version: "3.8"
+
+services:
+  redis:
+    image: redis:7-alpine
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 3s
+      retries: 3
+
+  postgres:
+    image: postgres:15-alpine
+    environment:
+      POSTGRES_USER: ai_mentor
+      POSTGRES_PASSWORD: ai_mentor
+      POSTGRES_DB: ai_mentor
+    ports:
+      - "5432:5432"
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U ai_mentor -d ai_mentor"]
+      interval: 10s
+      timeout: 3s
+      retries: 5
+
+  web:
+    build: .
+    ports:
+      - "5000:5000"
+    environment:
+      FLASK_ENV: development
+      DATABASE_URL: postgresql://ai_mentor:ai_mentor@postgres:5432/ai_mentor
+      REDIS_URL: redis://redis:6379
+      RATE_LIMIT_STORAGE_URI: redis://redis:6379/0
+      JWT_BLACKLIST_STORAGE_URI: redis://redis:6379/1
+      ASYNC_ANALYZE_ENABLED: "1"
+      RQ_QUEUE_NAME: default
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+  worker:
+    build: .
+    command: python worker.py
+    environment:
+      FLASK_ENV: development
+      DATABASE_URL: postgresql://ai_mentor:ai_mentor@postgres:5432/ai_mentor
+      REDIS_URL: redis://redis:6379
+      RATE_LIMIT_STORAGE_URI: redis://redis:6379/0
+      JWT_BLACKLIST_STORAGE_URI: redis://redis:6379/1
+      RQ_QUEUE_NAME: default
+    depends_on:
+      redis:
+        condition: service_healthy
+      postgres:
+        condition: service_healthy
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock:ro
+
+volumes:
+  redis_data:
+  postgres_data:

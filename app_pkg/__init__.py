@@ -11,6 +11,7 @@ Usage:
 from __future__ import annotations
 
 import os
+from urllib.parse import urlparse
 
 from dotenv import load_dotenv
 
@@ -23,8 +24,6 @@ except ImportError:
     _HAS_SENTRY = False
 
 from flask import Flask
-from flask_cors import CORS
-from flask_talisman import Talisman
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from app_pkg.blueprints.api import _refresh_tools, api_bp
@@ -34,15 +33,19 @@ from app_pkg.blueprints.static_files import static_bp
 from app_pkg.cli import register_cli
 from app_pkg.config import DevelopmentConfig, config_map
 from app_pkg.extensions import (
+    cors,
     csrf,
     db,
     get_redis_client,
     jwt,
     limiter,
     migrate,
+    ping_redis,
+    talisman,
 )
 from app_pkg.observability import init_observability
 from app_pkg.security.middleware import init_security
+from app_pkg.utils import allowed_origins, is_production
 
 load_dotenv()
 
@@ -63,9 +66,16 @@ def _build_config_obj(config):
 
 def _redis_storage_uri(db_num: int) -> str | None:
     _redis_url = (os.environ.get("REDIS_URL") or "").rstrip("/")
-    if _redis_url:
-        return f"{_redis_url}/{db_num}"
-    return None
+    if not _redis_url:
+        return None
+
+    parsed = urlparse(_redis_url)
+    path = f"/{db_num}"
+    query = f"?{parsed.query}" if parsed.query else ""
+    if parsed.path:
+        # Replace existing DB/path while preserving query string.
+        return f"{parsed.scheme}://{parsed.netloc}{path}{query}"
+    return f"{_redis_url}/{db_num}{query}"
 
 
 def _init_extensions(app):
@@ -92,7 +102,7 @@ def _init_extensions(app):
     app.config.setdefault(
         "JWT_BLACKLIST_ENABLED",
         os.environ.get("JWT_BLACKLIST_ENABLED")
-        or ("1" if _redis_storage_uri(0) else "0"),
+        or ("1" if _blacklist_storage.startswith("redis") else "0"),
     )
     if _blacklist_storage.startswith("redis"):
         get_redis_client()
@@ -102,7 +112,7 @@ def _init_extensions(app):
 
 def _configure_talisman(app, is_prod):
     """Apply security headers via Flask-Talisman."""
-    Talisman(
+    talisman.init_app(
         app,
         force_https=is_prod,
         strict_transport_security=is_prod,
@@ -131,11 +141,6 @@ def _configure_talisman(app, is_prod):
     )
 
 
-def _is_production_env():
-    env = (os.environ.get("FLASK_ENV") or os.environ.get("APP_ENV") or "").strip().lower()
-    return env in {"prod", "production"}
-
-
 def _enforce_production_debug(app):
     """Force debug off in production and warn if FLASK_DEBUG env var is set."""
     if os.environ.get("FLASK_DEBUG", "").strip().lower() in {"1", "true"}:
@@ -145,6 +150,19 @@ def _enforce_production_debug(app):
         )
     app.debug = False
     app.env = "production"
+
+
+def _verify_redis_connection(app):
+    """In production, confirm Redis responds to PING before accepting traffic."""
+    if not is_production():
+        return
+    if not ping_redis():
+        msg = (
+            "CRITICAL ERROR: Redis is unreachable in production. "
+            "Verify REDIS_URL and ensure Redis is running."
+        )
+        app.logger.critical(msg)
+        raise RuntimeError(msg)
 
 
 def _configure_proxy_fix(app):
@@ -169,21 +187,10 @@ def _init_sentry():
             )
 
 
-def _warn_production_config(app):
-    """Warn about missing Redis / JWT blacklist (delegated to config.py)."""
-
-
 def _configure_cors(app):
-    """Set up CORS from ALLOWED_ORIGINS env var."""
-    _allowed_origins = os.environ.get("ALLOWED_ORIGINS", "http://localhost:5173")
-    _cors_origins = (
-        [o.strip() for o in _allowed_origins.split(",") if o.strip()]
-        if _allowed_origins != "*"
-        else "*"
-    )
-    CORS(
+    cors.init_app(
         app,
-        origins=_cors_origins,
+        origins=allowed_origins(),
         methods=["GET", "POST", "DELETE", "OPTIONS"],
         allow_headers=["Content-Type", "Authorization", "X-API-Key", "X-CSRFToken"],
         expose_headers=["X-CSRFToken"],
@@ -212,22 +219,33 @@ def create_app(config=None) -> Flask:
         with app.app_context():
             config_obj.validate()
 
-    if _is_production_env():
+    if is_production():
+        from analyzer import sandbox_runtime_status  # noqa: PLC0415
+
+        status = sandbox_runtime_status()
+        if not status["ok"]:
+            msg = (
+                "CRITICAL ERROR: Docker sandbox is required in production but is unavailable. "
+                f"Reason: {status.get('reason', 'unknown')}. "
+                "Ensure the Docker daemon is running and accessible to the app."
+            )
+            app.logger.critical(msg)
+            raise RuntimeError(msg)
+
+    if is_production():
         _enforce_production_debug(app)
 
     _configure_proxy_fix(app)
 
-    if _is_production_env():
+    if is_production():
         _init_sentry()
 
     _init_extensions(app)
-
-    if _is_production_env():
-        _warn_production_config(app)
+    _verify_redis_connection(app)
 
     _configure_cors(app)
 
-    _configure_talisman(app, app.config.get("ENV") == "production" or _is_production_env())
+    _configure_talisman(app, app.config.get("ENV") == "production" or is_production())
 
     init_security(app)
     init_observability(app)
@@ -235,7 +253,7 @@ def create_app(config=None) -> Flask:
     app.register_blueprint(api_bp)
     app.register_blueprint(auth_bp)
     app.register_blueprint(static_bp)
-    if not _is_production_env():
+    if not is_production():
         app.register_blueprint(debug_bp)
 
     if app.config.get("ENV") == "development":

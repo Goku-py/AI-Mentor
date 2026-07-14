@@ -20,6 +20,7 @@ from flask_migrate import Migrate
 from flask_talisman import Talisman
 from flask_wtf.csrf import CSRFProtect
 
+from app_pkg.utils import is_production
 from models_pkg import db  # single db instance shared by models and app
 
 jwt = JWTManager()
@@ -34,13 +35,81 @@ migrate = Migrate()
 # ---------------------------------------------------------------------------
 _redis_pool: Any = None
 
+# ---------------------------------------------------------------------------
+# RQ queue (lazy — created on first use)
+# ---------------------------------------------------------------------------
+_rq_queue: Any = None
 
-def get_redis_client():
-    global _redis_pool  # noqa: PLW0603
-    if _redis_pool is not None:
-        return _redis_pool
+
+def _resolve_rq_redis_uri() -> str:
+    """Return the Redis URI to use for the RQ queue."""
+    uri = (os.environ.get("REDIS_URL") or "").rstrip("/")
+    if uri:
+        # RQ uses Redis DB 2 by default to avoid key collisions.
+        return f"{uri}/2"
+    return "redis://localhost:6379/2"
+
+
+def get_rq_queue():
+    """Return the shared RQ Queue using a Redis connection.
+
+    decode_responses is disabled because RQ serializes job payloads as bytes.
+    """
+    global _rq_queue  # noqa: PLW0603
+
+    if _rq_queue is not None:
+        return _rq_queue
+
+    import redis as _redis  # noqa: PLC0415
+    from rq import Queue  # noqa: PLC0415
+
+    uri = _resolve_rq_redis_uri()
+    queue_name = os.environ.get("RQ_QUEUE_NAME", "default")
+    connection = _redis.from_url(uri, decode_responses=False)
+    _rq_queue = Queue(queue_name, connection=connection)
+    return _rq_queue
+
+
+def _resolve_redis_uri() -> str:
+    """Return the Redis URI to use, preferring explicit config over REDIS_URL."""
+    try:
+        from flask import current_app  # noqa: PLC0415
+        uri = current_app.config.get("JWT_BLACKLIST_STORAGE_URI")
+        if uri and uri.startswith("redis"):
+            return uri
+    except RuntimeError:
+        pass
 
     uri = os.environ.get("JWT_BLACKLIST_STORAGE_URI", "memory://")
+    if uri.startswith("redis"):
+        return uri
+
+    redis_url = (os.environ.get("REDIS_URL") or "").rstrip("/")
+    if redis_url:
+        # Same DB as the JWT blacklist auto-detection in _init_extensions.
+        return f"{redis_url}/1"
+
+    return "memory://"
+
+
+def get_redis_client():
+    """Return a Redis client, or None if Redis is unavailable.
+
+    The cached client is validated with PING before reuse. On failure the
+    cached pool is invalidated and a single reconnect attempt is made.
+    Callers that must have Redis in production should use
+    require_redis_client() instead.
+    """
+    global _redis_pool  # noqa: PLW0603
+
+    if _redis_pool is not None:
+        try:
+            _redis_pool.ping()
+            return _redis_pool
+        except Exception:  # noqa: BLE001
+            _redis_pool = None
+
+    uri = _resolve_redis_uri()
     if not uri.startswith("redis"):
         return None
 
@@ -49,8 +118,41 @@ def get_redis_client():
     except ImportError:
         return None
 
-    _redis_pool = _redis.from_url(uri, decode_responses=True)
+    try:
+        client = _redis.from_url(uri, decode_responses=True)
+        client.ping()
+    except Exception:  # noqa: BLE001
+        return None
+
+    _redis_pool = client
     return _redis_pool
+
+
+def require_redis_client():
+    """Return a Redis client, raising in production if Redis is unavailable.
+
+    In development/testing this returns None when Redis is unavailable so
+    in-memory fallbacks continue to work.
+    """
+    client = get_redis_client()
+    if client is not None:
+        return client
+    if is_production():
+        raise RuntimeError("Redis is required in production but unavailable.")
+    return None
+
+
+def ping_redis() -> bool:
+    """Return True if Redis responds to PING."""
+    global _redis_pool  # noqa: PLW0603
+    client = get_redis_client()
+    if client is None:
+        return False
+    try:
+        return bool(client.ping())
+    except Exception:  # noqa: BLE001
+        _redis_pool = None
+        return False
 
 
 # ---------------------------------------------------------------------------
@@ -65,9 +167,12 @@ def jwt_blacklist_add(jti: str, expires_at: float | None = None) -> None:
 
     Uses Redis when JWT_BLACKLIST_STORAGE_URI=redis://...,
     otherwise falls back to an in-memory dict (process-local only).
+    Skips storing tokens that are already expired.
     """
     ttl = 900 if expires_at is None else max(0, int(expires_at - time.time()))
-    client = get_redis_client()
+    if ttl <= 0:
+        return
+    client = require_redis_client()
     if client is not None:
         client.setex(f"jwt_blacklist:{jti}", ttl, "1")
     else:
@@ -76,7 +181,7 @@ def jwt_blacklist_add(jti: str, expires_at: float | None = None) -> None:
 
 def jwt_blacklist_check(jti: str) -> bool:
     """Return True if the JWT's jti has been blacklisted."""
-    client = get_redis_client()
+    client = require_redis_client()
     if client is not None:
         return bool(client.get(f"jwt_blacklist:{jti}"))
     expiry = _jwt_blacklist.get(jti, 0)
@@ -97,10 +202,13 @@ __all__ = [
     "csrf",
     "db",
     "get_redis_client",
+    "get_rq_queue",
     "jwt",
     "jwt_blacklist_add",
     "jwt_blacklist_check",
     "limiter",
     "migrate",
+    "ping_redis",
+    "require_redis_client",
     "talisman",
 ]

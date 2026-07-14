@@ -63,8 +63,32 @@ export interface AnalyzeResponse {
   meta?: AnalyzeMeta;
 }
 
+export interface AnalyzeJobResponse {
+  ok: boolean;
+  job_id: string;
+  status: string;
+  poll_url: string;
+}
+
+export interface AnalyzeStatusResponse {
+  ok: boolean;
+  job_id: string;
+  status: "queued" | "started" | "finished" | "failed";
+  result?: AnalyzeResponse;
+  error?: string;
+}
+
 export type AuthTab = "login" | "register";
 export type AiMentorStatus = "ok" | "disabled" | "quota_exceeded" | "bad_response" | "api_error";
+export type Difficulty = "beginner" | "intermediate" | "advanced";
+
+export const DEFAULT_DIFFICULTY: Difficulty = "beginner";
+
+export const DIFFICULTIES: { id: Difficulty; name: string }[] = [
+  { id: "beginner", name: "Beginner" },
+  { id: "intermediate", name: "Intermediate" },
+  { id: "advanced", name: "Advanced" },
+] as const;
 
 export const SUPPORTED_LANGUAGES = [
   { id: "python", name: "Python" },

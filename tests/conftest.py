@@ -34,8 +34,7 @@ def mock_ai_mentorship():
 @pytest.fixture(autouse=True)
 def disable_jwt_blacklist():
     """JWT blacklist is disabled in tests (no Redis, in-memory is per-process)."""
-    import os as _os  # noqa: PLC0415
-    _os.environ.setdefault("JWT_BLACKLIST_ENABLED", "0")
+    os.environ.setdefault("JWT_BLACKLIST_ENABLED", "0")
 
 
 @pytest.fixture

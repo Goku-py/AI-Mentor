@@ -19,7 +19,9 @@ builder = "DOCKERFILE"
 #   GEMINI_API_KEY                 — from https://aistudio.google.com/app/apikey
 #   ALLOWED_ORIGINS                — exact frontend URL, e.g. https://your-app.railway.app
 #   FLASK_ENV=production
-#   HOST_EXECUTION_ENABLED=1       — enable subprocess sandbox (REQUIRED: Docker is unavailable on Railway)
+#
+#   Docker sandboxing is REQUIRED in production. Host execution is NOT allowed.
+#   Do NOT set HOST_EXECUTION_ENABLED — the app will refuse to start if it is set.
 #
 #   ⚠ DO NOT SET FLASK_DEBUG — it overrides DEBUG=False per Flask framework.
 #     If FLASK_DEBUG is set to any truthy value, ProductionConfig.validate()
@@ -48,4 +50,30 @@ builder = "DOCKERFILE"
 #   GEMINI_MODEL                   — default gemini-2.5-flash; override to test newer models
 #   ANALYZE_API_KEY                — shared secret for /analyze endpoint (prevents anonymous access)
 #   LOG_LEVEL=INFO                 — Python logging level
+#
+#   ASYNC_ANALYZE_ENABLED=1        — enqueue /analyze requests as RQ background jobs
+#   RQ_QUEUE_NAME=default          — RQ queue name (must match the worker service)
+#   RQ_WORKER_TIMEOUT=300          — per-job timeout in seconds
+#
+#   DB_POOL_SIZE=3                 — SQLAlchemy pool size (production: size + overflow <= 20)
+#   DB_MAX_OVERFLOW=5              — SQLAlchemy max overflow connections
+#   DB_POOL_TIMEOUT=10             — seconds to wait for a connection from the pool
+#   DB_POOL_RECYCLE=600            — seconds before recycling idle connections
+#   DB_POOL_PRE_PING=true          — verify connections before use
+#   DB_ECHO=false                  — echo SQL statements (debug only)
+#
+#   GEMINI_CIRCUIT_FAILURE_THRESHOLD=5   — consecutive Gemini failures before opening breaker
+#   GEMINI_CIRCUIT_COOLDOWN_SECONDS=60   — seconds before half-open probe
+#   GEMINI_CIRCUIT_HALF_OPEN_MAX=2       — probe calls while half-open
+#
+#   SANDBOX_SERVICE_URL            — optional external sandbox service URL
+# ================================================================
+
+# ================================================================
+# WORKER SERVICE (required when ASYNC_ANALYZE_ENABLED=1):
+# ================================================================
+#
+#   Create a second Railway service from the same repo and set:
+#     Start command: python worker.py
+#   Link the same Redis, Postgres, and env vars (except ASYNC_ANALYZE_ENABLED).
 # ================================================================
