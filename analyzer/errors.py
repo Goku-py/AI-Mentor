@@ -89,11 +89,16 @@ def _parse_python_traceback(stderr: str) -> dict[str, Any]:
                 line_number = int(match.group(1))
 
     for candidate in reversed(lines):
-        if ":" in candidate:
-            parts = candidate.split(":", 1)
-            exc_type = parts[0].strip()
-            exc_message = parts[1].strip()
-            break
+        stripped = candidate.strip()
+        if not stripped or stripped == "Traceback (most recent call last):":
+            continue
+        if ":" in stripped:
+            exc_type, _, exc_message = stripped.partition(":")
+            exc_type = exc_type.strip()
+            exc_message = exc_message.strip()
+        else:
+            exc_type = stripped
+        break
 
     help_data = _python_error_help(
         str(exc_type) if exc_type else "",

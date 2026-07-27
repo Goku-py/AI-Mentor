@@ -78,7 +78,7 @@ def _init_extensions(app):
     _blacklist_env = os.environ.get("JWT_BLACKLIST_ENABLED", "").strip().lower()
     app.config["JWT_BLACKLIST_ENABLED"] = (
         _blacklist_env in ("1", "true", "yes")
-        or ("1" if _redis_storage_uri(1) else "0")
+        or _blacklist_storage.startswith("redis")
     )
     if _blacklist_storage.startswith("redis"):
         get_redis_client()
