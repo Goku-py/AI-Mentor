@@ -209,7 +209,7 @@ class TestAnalyzeCode:
         async def fake_mentorship(*_args, **_kwargs):
             return feedback
 
-        monkeypatch.setattr(analyzer, "_get_ai_mentorship", fake_mentorship)
+        monkeypatch.setattr(analyzer.mentorship, "_get_ai_mentorship", fake_mentorship)
         result = await analyze_code("print('x')", "python")
         assert result["ai_mentor_feedback"] == feedback
         assert result["ai_mentor_status"] == status

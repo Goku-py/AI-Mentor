@@ -12,12 +12,10 @@ import os
 import time
 from typing import Any
 
-from flask_cors import CORS
 from flask_jwt_extended import JWTManager
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
 from flask_migrate import Migrate
-from flask_talisman import Talisman
 from flask_wtf.csrf import CSRFProtect
 
 from models_pkg import db  # single db instance shared by models and app
@@ -25,8 +23,6 @@ from models_pkg import db  # single db instance shared by models and app
 jwt = JWTManager()
 limiter = Limiter(key_func=get_remote_address)
 csrf = CSRFProtect()
-cors = CORS()
-talisman = Talisman()
 migrate = Migrate()
 
 # ---------------------------------------------------------------------------
@@ -93,7 +89,6 @@ def _check_if_token_revoked(_jwt_header: dict, jwt_payload: dict) -> bool:
 
 
 __all__ = [
-    "cors",
     "csrf",
     "db",
     "get_redis_client",
@@ -102,5 +97,4 @@ __all__ = [
     "jwt_blacklist_check",
     "limiter",
     "migrate",
-    "talisman",
 ]

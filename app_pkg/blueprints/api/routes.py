@@ -26,7 +26,7 @@ from sqlalchemy import text
 from analyzer import analyze_code, sandbox_runtime_status, verify_tools
 from app_pkg.extensions import csrf, db, limiter
 from app_pkg.observability import APP_START_TIME, APP_VERSION
-from app_pkg.security.middleware import SECURITY_METRICS, contains_abuse_pattern
+from app_pkg.security.middleware import SECURITY_METRICS, _add_metric, contains_abuse_pattern
 from app_pkg.utils import coerce_jwt_identity
 from models_pkg import AuditLog
 
@@ -235,7 +235,7 @@ def analyze():  # noqa: C901, PLR0911, PLR0912, PLR0915
     required_api_key = (os.environ.get("ANALYZE_API_KEY") or "").strip()
     provided_api_key = request.headers.get("X-API-Key", "").strip()
     if required_api_key and not secrets.compare_digest(required_api_key, provided_api_key):
-        SECURITY_METRICS["auth_failures"] += 1
+        _add_metric("auth_failures")
         return jsonify({"ok": False, "error": "Unauthorized. Missing or invalid API key."}), 401
 
     code = payload.get("code")
@@ -281,7 +281,7 @@ def analyze():  # noqa: C901, PLR0911, PLR0912, PLR0915
 
     abuse_hit = contains_abuse_pattern(code)
     if abuse_hit:
-        SECURITY_METRICS["abuse_pattern_rejections"] += 1
+        _add_metric("abuse_pattern_rejections")
         current_app.logger.warning("Blocked analyze request due to abuse pattern: %s", abuse_hit)
         _write_audit_log(current_user_id, language, code, had_error=True)
         return jsonify(
@@ -320,7 +320,7 @@ def analyze():  # noqa: C901, PLR0911, PLR0912, PLR0915
 
     acquired = _ANALYZE_SEMAPHORE.acquire(blocking=False)
     if not acquired:
-        SECURITY_METRICS["concurrency_rejections"] += 1
+        _add_metric("concurrency_rejections")
         return jsonify(
             {
                 "success": False,
@@ -345,7 +345,7 @@ def analyze():  # noqa: C901, PLR0911, PLR0912, PLR0915
             and isinstance(execution.get("error"), dict)
             and execution["error"].get("type") == "SandboxUnavailable"
         ):
-            SECURITY_METRICS["sandbox_failures"] += 1
+            _add_metric("sandbox_failures")
         _write_audit_log(
             current_user_id,
             language,
