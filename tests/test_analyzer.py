@@ -4,7 +4,10 @@ Unit tests for the code analyzer module.
 Run with: python -m pytest tests/test_analyzer.py -v
 """
 
+from unittest.mock import MagicMock
+
 import pytest
+import requests.exceptions
 
 import analyzer
 from analyzer import (
@@ -339,6 +342,36 @@ class TestPythonExecution:
         code = "x = undefined_variable"
         result = await analyze_code(code, "python")
         assert result["execution"]["error"] is not None
+
+
+class TestSandboxDeadline:
+    """Test the monotonic deadline watchdog for Docker container execution."""
+
+    def test_container_watchdog_kills_on_deadline_exceeded(self, monkeypatch):
+        """A container that never completes should be killed by the watchdog."""
+        container_mock = MagicMock()
+        container_mock.wait.side_effect = requests.exceptions.ReadTimeout("timed out")
+        container_mock.logs.return_value = b""
+        container_mock.kill = MagicMock()
+
+        client_mock = MagicMock()
+        client_mock.containers.run.return_value = container_mock
+
+        mock_docker = MagicMock()
+        mock_docker.from_env.return_value = client_mock
+        monkeypatch.setattr(analyzer.core, "docker", mock_docker)
+
+        execution = run_in_sandbox(
+            "print('x')",
+            "python",
+            "python:3.11-slim",
+            ["python", "{source}"],
+            timeout=5,
+        )
+        assert execution["timed_out"] is True
+        assert execution["returncode"] == -1
+        assert execution["error"]["type"] == "Timeout"
+        container_mock.kill.assert_called_once()
 
 
 if __name__ == "__main__":

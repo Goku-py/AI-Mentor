@@ -10,6 +10,7 @@ import signal
 import subprocess  # nosec B404
 import sys
 import tempfile
+import time
 from dataclasses import dataclass
 from typing import Any
 
@@ -20,6 +21,12 @@ from analyzer import errors as _errors
 from analyzer import mentorship as _mentorship
 
 _logger = logging.getLogger(__name__)
+
+
+def _raise_deadline_exceeded():
+    raise requests.exceptions.ReadTimeout
+
+
 class SafeResult(dict):
     pass
 
@@ -381,7 +388,10 @@ def run_in_sandbox(
                 )
                 try:
                     try:
+                        deadline = time.monotonic() + timeout_seconds
                         result = container.wait(timeout=timeout_seconds)
+                        if time.monotonic() > deadline:
+                            _raise_deadline_exceeded()
                         execution["returncode"] = result.get("StatusCode", 0) or 0
                     except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError):
                         with contextlib.suppress(APIError):
