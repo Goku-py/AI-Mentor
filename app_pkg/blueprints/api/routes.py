@@ -150,8 +150,10 @@ def metrics():
         "",
         "# HELP ai_mentor_blocked_automated_clients_total Total bot/scraper requests blocked",
         "# TYPE ai_mentor_blocked_automated_clients_total counter",
-        f"ai_mentor_blocked_automated_clients_total"
-        f" {SECURITY_METRICS['blocked_automated_clients']}",
+        (
+            f"ai_mentor_blocked_automated_clients_total"
+            f" {SECURITY_METRICS['blocked_automated_clients']}"
+        ),
         "",
         "# HELP ai_mentor_auth_failures_total Total API key auth failures",
         "# TYPE ai_mentor_auth_failures_total counter",

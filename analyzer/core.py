@@ -6,7 +6,6 @@ import contextlib
 import logging
 import os
 import re
-import requests.exceptions
 import signal
 import subprocess  # nosec B404
 import sys
@@ -14,11 +13,11 @@ import tempfile
 from dataclasses import dataclass
 from typing import Any
 
+import requests.exceptions
 from flask import current_app
 
 from analyzer import errors as _errors
 from analyzer import mentorship as _mentorship
-
 
 _logger = logging.getLogger(__name__)
 class SafeResult(dict):
@@ -102,8 +101,8 @@ def _empty_execution() -> dict[str, Any]:
 def _limit_resources_linux() -> None:
     if not sys.platform.startswith("linux"):
         return
-    import os as _os  # noqa: PLC0415
-    import resource  # noqa: PLC0415
+    import os as _os
+    import resource
 
     _os.nice(19)
     _os.setpgrp()
@@ -129,7 +128,7 @@ def sandbox_runtime_status() -> dict[str, Any]:
     try:
         client = docker.from_env()
         client.ping()
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         status["reason"] = f"Docker daemon unavailable: {exc}"
         return status
     status["ok"] = True
@@ -233,7 +232,7 @@ def _run_host_sandboxed(
         except subprocess.TimeoutExpired:
             # Kill the entire process group (created by setpgrp in preexec_fn).
             with contextlib.suppress(OSError):
-                os.killpg(proc.pid, signal.SIGKILL)  # noqa: E
+                os.killpg(proc.pid, signal.SIGKILL)
             stdout, stderr = proc.communicate()
             execution["timed_out"] = True
             execution["returncode"] = -1
@@ -266,7 +265,7 @@ def _run_host_sandboxed(
                 "Install the missing tool or use a different language.",
             ],
         }
-    except Exception as exc:  # noqa: BLE001
+    except Exception as exc:
         execution["returncode"] = -1
         execution["stderr"] = str(exc)
 
@@ -279,15 +278,15 @@ def _format_host_cmd(
     tmp_dir: str,
     main_class: str,
 ) -> list[str]:
-    output = os.path.join(tmp_dir, "program")  # noqa: PTH118
-    classes = os.path.join(tmp_dir, "classes")  # noqa: PTH118
+    output = os.path.join(tmp_dir, "program")
+    classes = os.path.join(tmp_dir, "classes")
     return [
         part.format(source=source_path, output=output, classes=classes, main_class=main_class)
         for part in cmd
     ]
 
 
-def run_in_sandbox(  # noqa: C901, PLR0911, PLR0912, PLR0915
+def run_in_sandbox(
     code: str,
     language: str,
     image: str,
@@ -321,8 +320,8 @@ def run_in_sandbox(  # noqa: C901, PLR0911, PLR0912, PLR0915
         command = [
             part.format(
                 source=f"/workspace/{source_name}",
-                output="/tmp/program",  # noqa: S108
-                classes="/tmp",  # noqa: S108
+                output="/tmp/program",
+                classes="/tmp",
                 main_class=main_class,
             )
             for part in cmd
@@ -330,7 +329,7 @@ def run_in_sandbox(  # noqa: C901, PLR0911, PLR0912, PLR0915
 
     try:
         with tempfile.TemporaryDirectory() as tmp_dir:
-            source_path = os.path.join(tmp_dir, source_name)  # noqa: PTH118
+            source_path = os.path.join(tmp_dir, source_name)
             with open(source_path, "w", encoding="utf-8") as f:  # noqa: PTH123
                 f.write(code)
             # Classes dir used by Java compilation (javac -d).
@@ -349,7 +348,7 @@ def run_in_sandbox(  # noqa: C901, PLR0911, PLR0912, PLR0915
 
             try:
                 client = docker.from_env()
-            except Exception as docker_err:  # noqa: BLE001
+            except Exception as docker_err:
                 if _host_execution_allowed():
                     host_cmd = _format_host_cmd(cmd, source_path, tmp_dir, main_class)
                     return _run_host_sandboxed(host_cmd, timeout_seconds, tmp_dir)
@@ -378,7 +377,7 @@ def run_in_sandbox(  # noqa: C901, PLR0911, PLR0912, PLR0915
                     stdout=True,
                     stderr=True,
                     detach=True,
-                    tmpfs={"/tmp": "rw,nosuid,size=128m"},  # noqa: S108
+                    tmpfs={"/tmp": "rw,nosuid,size=128m"},
                 )
                 try:
                     try:
@@ -523,7 +522,7 @@ def _line_based_checks(code: str) -> list[Issue]:
     lines = code.splitlines()
 
     for idx, line in enumerate(lines, start=1):
-        if len(line) > 79:  # noqa: PLR2004
+        if len(line) > 79:
             issues.append(
                 Issue(
                     line=idx,
@@ -567,7 +566,7 @@ def _line_based_checks(code: str) -> list[Issue]:
     return issues
 
 
-def _detect_language_mismatch(code: str, selected_language: str) -> dict[str, str] | None:  # noqa: C901
+def _detect_language_mismatch(code: str, selected_language: str) -> dict[str, str] | None:
     """Detect likely language mismatch using marker-score heuristics."""
     selected = (selected_language or "python").strip().lower()
     if selected == "js":
@@ -966,7 +965,10 @@ def _analyze_language_not_yet_supported(
         "type": "LanguageUnsupported",
         "message": f"Execution for language '{language}' is not configured on this server.",
         "line": None,
-        "explanation": "Only Python and JavaScript are currently executed. Other languages are reported statically.",
+        "explanation": (
+            "Only Python and JavaScript are currently executed. "
+            "Other languages are reported statically."
+        ),
         "suggestions": [
             "Switch to Python or JavaScript to see full compiler-style execution and explanations.",
             "Extend the backend analyzer to integrate the compiler or runtime for this language.",
@@ -975,7 +977,7 @@ def _analyze_language_not_yet_supported(
     return issues, execution
 
 
-async def analyze_code(  # noqa: C901
+async def analyze_code(
     code: str,
     language: str = "python",
     difficulty: str = "beginner",

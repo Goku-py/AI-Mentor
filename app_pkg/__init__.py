@@ -25,7 +25,6 @@ except ImportError:
 from flask import Flask
 from flask_cors import CORS
 from flask_talisman import Talisman
-
 from werkzeug.middleware.proxy_fix import ProxyFix
 
 from app_pkg.blueprints.api import _refresh_tools, api_bp
@@ -189,7 +188,11 @@ def create_app(config=None) -> Flask:
     app = Flask(__name__, static_folder="../dist", static_url_path="")
 
     if config is None:
-        env = (os.environ.get("FLASK_ENV") or os.environ.get("APP_ENV") or "development").strip().lower()
+        env = (
+            (os.environ.get("FLASK_ENV") or os.environ.get("APP_ENV") or "development")
+            .strip()
+            .lower()
+        )
         config_obj = config_map.get(env, DevelopmentConfig)
     elif isinstance(config, str):
         config_obj = config_map.get(config.lower(), DevelopmentConfig)

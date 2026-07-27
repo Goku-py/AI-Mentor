@@ -133,7 +133,9 @@ def _javascript_error_help(
             "Guard property access with checks like `if (obj && obj.prop) { ... }`.",
         ]
     elif error_name == "SyntaxError":
-        explanation = "There is a mistake in the JavaScript syntax, so the engine cannot parse the code."
+        explanation = (
+            "There is a mistake in the JavaScript syntax, so the engine cannot parse the code."
+        )
         if line:
             explanation += f" Review line {line}."
         suggestions = [

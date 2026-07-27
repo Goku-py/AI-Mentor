@@ -11,7 +11,6 @@ from collections import OrderedDict
 from typing import Any
 
 import httpx
-from flask import current_app
 
 from app_pkg.security.middleware import SECURITY_METRICS, _add_metric
 
@@ -132,7 +131,8 @@ _MENTOR_PROMPTS = (
     "- Do NOT give the corrected code.\n"
     "- Be VERY BRIEF — max 3 sentences per error.\n"
     "- Focus ONLY on errors that prevent the code from running."
-    " Do NOT comment on style issues (line length, indentation, trailing whitespace, TODO comments).\n\n"
+    " Do NOT comment on style issues"
+    " (line length, indentation, trailing whitespace, TODO comments).\n\n"
     "Detected issues:\n{error_context}\n\n"
     "Student code ({language}) with line numbers:\n"
     "```\n{numbered_lines}\n```"
@@ -143,7 +143,9 @@ def _build_mentor_prompt(code: str, language: str, error_context: str) -> str:
     if len(code) > MAX_AI_CODE_CHARS:
         safe += "\n... [TRUNCATED DUE TO LENGTH BUDGET]"
     numbered = "\n".join(f"{i}: {line}" for i, line in enumerate(safe.splitlines(), start=1))
-    return _MENTOR_PROMPTS.format(error_context=error_context, numbered_lines=numbered, language=language)
+    return _MENTOR_PROMPTS.format(
+        error_context=error_context, numbered_lines=numbered, language=language
+    )
 
 _STYLE_ISSUE_CODES: set[str] = {
     "LONG_LINE",
