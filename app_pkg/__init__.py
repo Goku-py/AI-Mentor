@@ -32,7 +32,7 @@ from app_pkg.blueprints.auth import auth_bp
 from app_pkg.blueprints.debug_bp import debug_bp
 from app_pkg.blueprints.static_files import static_bp
 from app_pkg.cli import register_cli
-from app_pkg.config import DevelopmentConfig, config_map
+from app_pkg.config import DevelopmentConfig, ProductionConfig, config_map
 from app_pkg.extensions import (
     csrf,
     db,
@@ -45,20 +45,6 @@ from app_pkg.observability import init_observability
 from app_pkg.security.middleware import init_security
 
 load_dotenv()
-
-
-def _build_config_obj(config):
-    """Resolve the config class from a string, class, or None."""
-    if config is None:
-        env = (
-            (os.environ.get("FLASK_ENV") or os.environ.get("APP_ENV") or "development")
-            .strip()
-            .lower()
-        )
-        return config_map.get(env, DevelopmentConfig)
-    if isinstance(config, str):
-        return config_map.get(config.lower(), DevelopmentConfig)
-    return config
 
 
 def _redis_storage_uri(db_num: int) -> str | None:
@@ -79,7 +65,7 @@ def _init_extensions(app):
         or _redis_storage_uri(0)
         or "memory://"
     )
-    app.config.setdefault("RATELIMIT_STORAGE_URI", _rate_limit_storage)
+    app.config["RATELIMIT_STORAGE_URI"] = _rate_limit_storage
     app.config.setdefault("RATELIMIT_DEFAULT", "200 per day; 50 per hour")
     limiter.init_app(app)
 
@@ -88,11 +74,11 @@ def _init_extensions(app):
         or _redis_storage_uri(1)
         or "memory://"
     )
-    app.config.setdefault("JWT_BLACKLIST_STORAGE_URI", _blacklist_storage)
-    app.config.setdefault(
-        "JWT_BLACKLIST_ENABLED",
-        os.environ.get("JWT_BLACKLIST_ENABLED")
-        or ("1" if _redis_storage_uri(0) else "0"),
+    app.config["JWT_BLACKLIST_STORAGE_URI"] = _blacklist_storage
+    _blacklist_env = os.environ.get("JWT_BLACKLIST_ENABLED", "").strip().lower()
+    app.config["JWT_BLACKLIST_ENABLED"] = (
+        _blacklist_env in ("1", "true", "yes")
+        or ("1" if _redis_storage_uri(1) else "0")
     )
     if _blacklist_storage.startswith("redis"):
         get_redis_client()
@@ -169,10 +155,6 @@ def _init_sentry():
             )
 
 
-def _warn_production_config(app):
-    """Warn about missing Redis / JWT blacklist (delegated to config.py)."""
-
-
 def _configure_cors(app):
     """Set up CORS from ALLOWED_ORIGINS env var."""
     _allowed_origins = os.environ.get("ALLOWED_ORIGINS", "http://localhost:5173")
@@ -205,29 +187,37 @@ def create_app(config=None) -> Flask:
     """Create and return a fully configured Flask application."""
     app = Flask(__name__, static_folder="../dist", static_url_path="")
 
-    config_obj = _build_config_obj(config)
+    if config is None:
+        env = (
+            (os.environ.get("FLASK_ENV") or os.environ.get("APP_ENV") or "development")
+            .strip()
+            .lower()
+        )
+        config_obj = config_map.get(env, DevelopmentConfig)
+    elif isinstance(config, str):
+        config_obj = config_map.get(config.lower(), DevelopmentConfig)
+    else:
+        config_obj = config
     app.config.from_object(config_obj)
 
     if hasattr(config_obj, "validate") and callable(config_obj.validate):
         with app.app_context():
             config_obj.validate()
 
-    if _is_production_env():
+    is_prod = _is_production_env() or isinstance(config_obj, ProductionConfig)
+
+    if is_prod:
         _enforce_production_debug(app)
 
     _configure_proxy_fix(app)
 
-    if _is_production_env():
+    if is_prod:
         _init_sentry()
 
     _init_extensions(app)
 
-    if _is_production_env():
-        _warn_production_config(app)
-
     _configure_cors(app)
-
-    _configure_talisman(app, app.config.get("ENV") == "production" or _is_production_env())
+    _configure_talisman(app, is_prod)
 
     init_security(app)
     init_observability(app)
@@ -235,7 +225,7 @@ def create_app(config=None) -> Flask:
     app.register_blueprint(api_bp)
     app.register_blueprint(auth_bp)
     app.register_blueprint(static_bp)
-    if not _is_production_env():
+    if not is_prod:
         app.register_blueprint(debug_bp)
 
     if app.config.get("ENV") == "development":

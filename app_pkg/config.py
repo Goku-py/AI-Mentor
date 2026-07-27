@@ -15,10 +15,6 @@ from typing import ClassVar
 from sqlalchemy.pool import NullPool, StaticPool
 
 
-def _bool_env(key: str, *, default: bool = False) -> bool:
-    return os.environ.get(key, str(default)).strip().lower() in ("1", "true", "yes")
-
-
 def _is_prod() -> bool:
     return (os.environ.get("FLASK_ENV") or os.environ.get("APP_ENV") or "").strip().lower() in {
         "prod",
@@ -112,14 +108,16 @@ class BaseConfig:
     # ------------------------------------------------------------------
     # JWT token blacklist (in-memory for dev, Redis for prod)
     # ------------------------------------------------------------------
-    JWT_BLACKLIST_ENABLED: bool = _bool_env("JWT_BLACKLIST_ENABLED", default=False)
+    JWT_BLACKLIST_ENABLED: bool = os.environ.get(
+        "JWT_BLACKLIST_ENABLED", "False"
+    ).strip().lower() in ("1", "true", "yes")
     JWT_BLACKLIST_STORAGE_URI: str = os.environ.get(
         "JWT_BLACKLIST_STORAGE_URI", "memory://"
     )
 
 
 # Set pool options AFTER class definition so _db_engine_options() can be called cleanly
-BaseConfig.SQLALCHEMY_ENGINE_OPTIONS = _db_engine_options(BaseConfig._raw_db_url)  # noqa: SLF001
+BaseConfig.SQLALCHEMY_ENGINE_OPTIONS = _db_engine_options(BaseConfig._raw_db_url)
 
 
 class DevelopmentConfig(BaseConfig):

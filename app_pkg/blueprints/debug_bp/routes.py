@@ -99,7 +99,7 @@ def debug_gemini_status():  # noqa: C901, PLR0911, PLR0912
             error_body = (http_err.read() or b"").decode("utf-8", errors="replace")
             error_json = json.loads(error_body) if error_body else {}
             error_message = error_json.get("error", {}).get("message", "")
-        except Exception:  # noqa: BLE001
+        except Exception:  # noqa: BLE001, S110
             pass  # error_message and error_body stay ""
         haystack = (error_message + "\n" + error_body).lower()
         if status_code == 403:  # noqa: PLR2004

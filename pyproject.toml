@@ -11,6 +11,7 @@ line-length = 100
 [tool.ruff.lint]
 select = ["ALL"]
 ignore = [
+    "CPY001",  # copyright notice
     "D",       # docstrings
     "ANN",     # type annotations
     "S101",    # assert usage
@@ -25,7 +26,8 @@ ignore = [
 "tests/*" = ["S", "PLR", "ARG"]
 "migrations/*" = ["ALL"]
 "cli.py" = ["T201"]
-# "analyzer.py" = ["T201"]
+"analyzer/*" = ["C901", "PLR0911", "PLR0912", "PLR0915", "SLF001", "ARG001", "PLW0603", "PLR2004", "PTH118", "PLC0415"]
+"app_pkg/*" = ["SLF001"]
 
 [tool.ruff.format]
 quote-style = "double"

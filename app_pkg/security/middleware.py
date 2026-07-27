@@ -9,6 +9,7 @@ from __future__ import annotations
 import os
 import re
 import secrets
+import threading
 import unicodedata
 
 from flask import jsonify, request
@@ -33,6 +34,14 @@ SECURITY_METRICS: dict = {
     "ai_mentor_calls_made": 0,
     "ai_mentor_tokens_used": 0,
 }
+
+_metrics_lock = threading.Lock()
+
+
+def _add_metric(key: str, delta: int = 1) -> None:
+    """Thread-safe increment of a SECURITY_METRICS counter."""
+    with _metrics_lock:
+        SECURITY_METRICS[key] = SECURITY_METRICS.get(key, 0) + delta
 
 
 # ---------------------------------------------------------------------------
@@ -107,7 +116,7 @@ def init_security(app) -> None:
 
         ua = request.headers.get("User-Agent", "").strip()
         if not ua or _BOT_UA_RE.search(ua):
-            SECURITY_METRICS["blocked_automated_clients"] += 1
+            _add_metric("blocked_automated_clients")
             app.logger.warning(
                 "Blocked automated client: UA=%r path=%s addr=%s",
                 ua,

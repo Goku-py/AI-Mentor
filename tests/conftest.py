@@ -27,7 +27,7 @@ def mock_ai_mentorship():
     if os.environ.get("ENABLE_LIVE_AI") == "1":
         yield
         return
-    with patch("analyzer._get_ai_mentorship", return_value="LOOKS_GOOD"):
+    with patch("analyzer.mentorship._get_ai_mentorship", return_value="LOOKS_GOOD"):
         yield
 
 

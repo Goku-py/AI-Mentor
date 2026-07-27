@@ -3,8 +3,6 @@ from __future__ import annotations
 import ast
 import asyncio
 import contextlib
-import hashlib
-import json
 import logging
 import os
 import re
@@ -13,19 +11,20 @@ import subprocess  # nosec B404
 import sys
 import tempfile
 import time
-import urllib.error
-import urllib.parse
-import urllib.request
-from collections import OrderedDict
 from dataclasses import dataclass
 from typing import Any
 
-import httpx
+import requests.exceptions
 from flask import current_app
 
-from app_pkg.security.middleware import SECURITY_METRICS
+from analyzer import errors as _errors
+from analyzer import mentorship as _mentorship
 
 _logger = logging.getLogger(__name__)
+
+
+def _raise_deadline_exceeded():
+    raise requests.exceptions.ReadTimeout
 
 
 class SafeResult(dict):
@@ -109,8 +108,8 @@ def _empty_execution() -> dict[str, Any]:
 def _limit_resources_linux() -> None:
     if not sys.platform.startswith("linux"):
         return
-    import os as _os  # noqa: PLC0415
-    import resource  # noqa: PLC0415
+    import os as _os
+    import resource
 
     _os.nice(19)
     _os.setpgrp()
@@ -209,8 +208,8 @@ def _run_host_sandboxed(
     # Minimal environment — no secrets from parent process.
     host_env: dict[str, str] = {
         "PATH": os.environ.get("PATH", ""),
-        "HOME": os.environ.get("HOME", "/tmp"),
-        "TMPDIR": cwd or "/tmp",
+        "HOME": os.environ.get("HOME", "/tmp"),  # noqa: S108
+        "TMPDIR": cwd or "/tmp",  # noqa: S108
         "LC_ALL": "C.UTF-8",
         # Best-effort network disabling (defense-in-depth, not a guarantee).
         "NO_NETWORK": "1",
@@ -231,7 +230,7 @@ def _run_host_sandboxed(
             stderr=subprocess.PIPE,
             text=True,
             env=host_env,
-            preexec_fn=preexec,
+            preexec_fn=preexec,  # noqa: PLW1509
             cwd=cwd,
             close_fds=True,
         )
@@ -240,7 +239,7 @@ def _run_host_sandboxed(
         except subprocess.TimeoutExpired:
             # Kill the entire process group (created by setpgrp in preexec_fn).
             with contextlib.suppress(OSError):
-                os.killpg(proc.pid, signal.SIGKILL)  # noqa: E
+                os.killpg(proc.pid, signal.SIGKILL)
             stdout, stderr = proc.communicate()
             execution["timed_out"] = True
             execution["returncode"] = -1
@@ -286,15 +285,15 @@ def _format_host_cmd(
     tmp_dir: str,
     main_class: str,
 ) -> list[str]:
-    output = os.path.join(tmp_dir, "program")  # noqa: PTH118
-    classes = os.path.join(tmp_dir, "classes")  # noqa: PTH118
+    output = os.path.join(tmp_dir, "program")
+    classes = os.path.join(tmp_dir, "classes")
     return [
         part.format(source=source_path, output=output, classes=classes, main_class=main_class)
         for part in cmd
     ]
 
 
-def run_in_sandbox(  # noqa: C901, PLR0911, PLR0912, PLR0915
+def run_in_sandbox(
     code: str,
     language: str,
     image: str,
@@ -337,7 +336,7 @@ def run_in_sandbox(  # noqa: C901, PLR0911, PLR0912, PLR0915
 
     try:
         with tempfile.TemporaryDirectory() as tmp_dir:
-            source_path = os.path.join(tmp_dir, source_name)  # noqa: PTH118
+            source_path = os.path.join(tmp_dir, source_name)
             with open(source_path, "w", encoding="utf-8") as f:  # noqa: PTH123
                 f.write(code)
             # Classes dir used by Java compilation (javac -d).
@@ -388,42 +387,39 @@ def run_in_sandbox(  # noqa: C901, PLR0911, PLR0912, PLR0915
                     tmpfs={"/tmp": "rw,nosuid,size=128m"},  # noqa: S108
                 )
                 try:
-                    deadline = time.monotonic() + timeout_seconds
-                    timed_out = False
-                    while True:
-                        container.reload()
-                        state = (
-                            container.attrs.get("State", {})
-                            if isinstance(container.attrs, dict)
-                            else {}
-                        )
-                        if not state.get("Running", False):
-                            execution["returncode"] = int(state.get("ExitCode", 0) or 0)
-                            break
-                        if time.monotonic() >= deadline:
-                            timed_out = True
-                            with contextlib.suppress(APIError):
-                                container.kill()
-                            container.reload()
-                            state = (
-                                container.attrs.get("State", {})
-                                if isinstance(container.attrs, dict)
-                                else {}
-                            )
-                            execution["returncode"] = int(state.get("ExitCode", -1) or -1)
-                            execution["timed_out"] = True
-                            execution["error"] = {
-                                "type": "Timeout",
-                                "message": "Program execution took too long and was stopped (possible infinite loop or heavy computation).",  # noqa: E501
-                                "line": None,
-                                "explanation": "The program did not finish within the allowed time limit.",  # noqa: E501
-                                "suggestions": [
-                                    "Check for infinite loops or very slow operations.",
-                                    "Try running a smaller piece of the program or simplifying the logic.",  # noqa: E501
-                                ],
-                            }
-                            break
-                        time.sleep(0.1)
+                    try:
+                        deadline = time.monotonic() + timeout_seconds
+                        result = container.wait(timeout=timeout_seconds)
+                        if time.monotonic() > deadline:
+                            _raise_deadline_exceeded()
+                        execution["returncode"] = result.get("StatusCode", 0) or 0
+                    except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError):
+                        with contextlib.suppress(APIError):
+                            container.kill()
+                        execution["timed_out"] = True
+                        execution["returncode"] = -1
+                        execution["error"] = {
+                            "type": "Timeout",
+                            "message": "Program execution took too long and was stopped (possible infinite loop or heavy computation).",  # noqa: E501
+                            "line": None,
+                            "explanation": "The program did not finish within the allowed time limit.",  # noqa: E501
+                            "suggestions": [
+                                "Check for infinite loops or very slow operations.",
+                                "Try running a smaller piece of the program or simplifying the logic.",  # noqa: E501
+                            ],
+                        }
+                    except Exception:  # noqa: BLE001
+                        with contextlib.suppress(APIError):
+                            container.kill()
+                        execution["error"] = {
+                            "type": "DockerError",
+                            "message": "Container execution failed unexpectedly.",
+                            "line": None,
+                            "explanation": "The Docker container encountered an error during execution.",  # noqa: E501
+                            "suggestions": [
+                                "Try running the code again.",
+                            ],
+                        }
 
                     try:
                         stdout_bytes = container.logs(stdout=True, stderr=False)
@@ -447,8 +443,6 @@ def run_in_sandbox(  # noqa: C901, PLR0911, PLR0912, PLR0915
 
                     execution["stdout"] = stdout_text
                     execution["stderr"] = stderr_text
-                    if execution["returncode"] == -1 and not timed_out:
-                        execution["returncode"] = 0
 
                     return execution
                 finally:
@@ -537,7 +531,7 @@ def _line_based_checks(code: str) -> list[Issue]:
     lines = code.splitlines()
 
     for idx, line in enumerate(lines, start=1):
-        if len(line) > 79:  # noqa: PLR2004
+        if len(line) > 79:
             issues.append(
                 Issue(
                     line=idx,
@@ -581,7 +575,7 @@ def _line_based_checks(code: str) -> list[Issue]:
     return issues
 
 
-def _detect_language_mismatch(code: str, selected_language: str) -> dict[str, str] | None:  # noqa: C901
+def _detect_language_mismatch(code: str, selected_language: str) -> dict[str, str] | None:
     """Detect likely language mismatch using marker-score heuristics."""
     selected = (selected_language or "python").strip().lower()
     if selected == "js":
@@ -683,166 +677,7 @@ def _detect_language_mismatch(code: str, selected_language: str) -> dict[str, st
     return mismatch(detected)
 
 
-_ERROR_HELP: dict[str, dict[str, tuple[str, list[str]]]] = {
-    "ZeroDivisionError": {
-        "beginner": (
-            "You attempted to divide by zero, which is not allowed in mathematics or Python.",
-            [
-                "Check the value of the denominator before dividing.",
-                "Guard the division with an `if denominator != 0:` condition.",
-            ],
-        ),
-        "intermediate": (
-            "The code is attempting a division operation where the divisor equals zero.",
-            [
-                "Review the mathematical operation that's failing.",
-                "Add a conditional check before division operations.",
-            ],
-        ),
-        "advanced": ("Division by zero", []),
-    },
-    "NameError": {
-        "beginner": (
-            "Python tried to use a variable or name that has not been defined yet.",
-            [
-                "Make sure the variable is defined before you use it.",
-                "Check for typos in the variable or function name.",
-            ],
-        ),
-        "intermediate": (
-            "A variable or function is being referenced that hasn't been defined in the current scope.",  # noqa: E501
-            [
-                "Ensure all names are defined before use.",
-                "Check for scope issues.",
-            ],
-        ),
-        "advanced": ("Undefined name reference", []),
-    },
-    "TypeError": {
-        "beginner": (
-            "An operation or function was applied to a value of an inappropriate type.",
-            [
-                "Check the types of the variables used on the failing line.",
-                "Convert values to the expected type (for example, `int(...)` or `str(...)`).",
-            ],
-        ),
-        "intermediate": (
-            "An operation was performed on incompatible data types.",
-            [
-                "Review type compatibility for the operation being performed.",
-                "Consider type conversion if needed.",
-            ],
-        ),
-        "advanced": ("Type mismatch", []),
-    },
-    "IndexError": {
-        "beginner": (
-            "You tried to access a list (or similar container) at a position that does not exist.",
-            [
-                "Check the length of the list before indexing.",
-                "Remember that valid indices go from 0 up to `len(list) - 1`.",
-            ],
-        ),
-        "intermediate": (
-            "An index is out of bounds for the container being accessed.",
-            [
-                "Verify the container's size before indexing.",
-                "Check boundary conditions in loops.",
-            ],
-        ),
-        "advanced": ("Index out of bounds", []),
-    },
-    "KeyError": {
-        "beginner": (
-            "You tried to access a dictionary key that does not exist.",
-            [
-                "Use `in` to check whether a key exists before accessing it.",
-                "Use `dict.get(key, default)` if the key might be missing.",
-            ],
-        ),
-        "intermediate": (
-            "The code attempts to access a dictionary with a key that isn't present.",
-            [
-                "Check key existence before access.",
-                "Use defensive dictionary access methods.",
-            ],
-        ),
-        "advanced": ("Missing dictionary key", []),
-    },
-}
-
-
-def _python_error_help(
-    exc_type: str,
-    message: str,
-    difficulty: str = "beginner",
-    line: int | None = None,
-) -> dict[str, Any]:
-    exc_type = exc_type or ""
-    entry = _ERROR_HELP.get(exc_type, {}).get(difficulty)
-    if entry is not None:
-        explanation, suggestions = entry
-    else:
-        explanation = "Your program raised a runtime error."
-        suggestions = [
-            "Read the error message carefully and check the referenced line number.",
-            "Print intermediate values to understand what the program is doing before it crashes.",
-        ]
-    if line and difficulty == "beginner":
-        explanation += f" Review line {line}."
-    return {
-        "type": exc_type,
-        "message": message,
-        "explanation": explanation,
-        "suggestions": suggestions,
-    }
-
-
-def _parse_python_traceback(stderr: str, difficulty: str = "beginner") -> dict[str, Any]:
-    """
-    Extract error type, message and line number from a Python traceback.
-    """
-    if not stderr:
-        return {
-            "type": None,
-            "message": "",
-            "line": None,
-            "explanation": "",
-            "suggestions": [],
-        }
-
-    lines = stderr.strip().splitlines()
-    exc_type = None
-    exc_message = ""
-    line_number: int | None = None
-
-    # Try to find "File ..., line N" (the last one is usually the crashing line)
-    file_line_pattern = re.compile(r'File ".*", line (\d+)')
-    for line in lines:
-        match = file_line_pattern.search(line)
-        if match:
-            with contextlib.suppress(ValueError):
-                line_number = int(match.group(1))
-
-    # The last non-empty line typically looks like "ErrorType: message"
-    for candidate in reversed(lines):
-        if ":" in candidate:
-            parts = candidate.split(":", 1)
-            exc_type = parts[0].strip()
-            exc_message = parts[1].strip()
-            break
-
-    help_data = _python_error_help(
-        str(exc_type) if exc_type else "",
-        exc_message,
-        difficulty=difficulty,
-        line=line_number,
-    )
-    help_data["line"] = line_number
-    return help_data
-
-
-def _run_python(code: str, _timeout: float = 3.0, difficulty: str = "beginner") -> dict[str, Any]:
+def _run_python(code: str, _timeout: float = 3.0) -> dict[str, Any]:
     execution = _empty_execution()
 
     execution = run_in_sandbox(
@@ -854,148 +689,12 @@ def _run_python(code: str, _timeout: float = 3.0, difficulty: str = "beginner") 
     )
 
     if execution["returncode"] != 0 and not execution["error"] and execution["stderr"]:
-        execution["error"] = _parse_python_traceback(execution["stderr"], difficulty=difficulty)
+        execution["error"] = _errors._parse_python_traceback(execution["stderr"])
 
     return execution
 
 
-def _javascript_error_help(  # noqa: C901, PLR0912
-    error_name: str,
-    message: str,
-    difficulty: str = "beginner",
-    line: int | None = None,
-) -> dict[str, Any]:
-    """Return explanation and suggestions for common JavaScript runtime errors.
-
-    Args:
-        error_name: The error type name
-        message: The error message
-        difficulty: "beginner", "intermediate", or "advanced"
-        line: The line number where error occurred (for beginner difficulty)
-    """
-    error_name = error_name or ""
-
-    # Default beginner explanations
-    explanation = "Your JavaScript program raised a runtime error."
-    suggestions: list[str] = [
-        "Read the error message carefully and check the referenced line number.",
-        "Use console.log to inspect values before the program crashes.",
-    ]
-
-    if error_name == "ReferenceError":
-        if difficulty == "beginner":
-            explanation = (
-                "JavaScript tried to use a variable that does not exist in the current scope."
-            )
-            if line:
-                explanation += f" Look at line {line}."
-            suggestions = [
-                "Make sure the variable is declared before it is used.",
-                "Check for typos in the variable or function name.",
-            ]
-        elif difficulty == "intermediate":
-            explanation = "A variable or function is being referenced that hasn't been defined in the current scope."  # noqa: E501
-            suggestions = [
-                "Ensure all names are declared before use.",
-                "Check for scope issues.",
-            ]
-        else:  # advanced
-            explanation = "Undefined identifier reference"
-            suggestions = []
-    elif error_name == "TypeError":
-        if difficulty == "beginner":
-            explanation = "An operation was performed on a value of an unexpected type."
-            if line:
-                explanation += f" Check line {line}."
-            suggestions = [
-                "Check that objects and functions are what you expect before using them.",
-                "Guard property access with checks like `if (obj && obj.prop) { ... }`.",
-            ]
-        elif difficulty == "intermediate":
-            explanation = "An operation was attempted on an incompatible type."
-            suggestions = [
-                "Verify type compatibility before operations.",
-                "Use type checks or guards.",
-            ]
-        else:  # advanced
-            explanation = "Type mismatch"
-            suggestions = []
-    elif error_name == "SyntaxError":
-        if difficulty == "beginner":
-            explanation = (
-                "There is a mistake in the JavaScript syntax, so the engine cannot parse the code."
-            )
-            if line:
-                explanation += f" Review line {line}."
-            suggestions = [
-                "Look for missing brackets, parentheses, or commas near the reported location.",
-                "Use a code editor with syntax highlighting to spot the error more easily.",
-            ]
-        elif difficulty == "intermediate":
-            explanation = "The code contains syntactic errors that prevent parsing."
-            suggestions = [
-                "Check bracket/paren/brace matching.",
-                "Look for missing punctuation.",
-            ]
-        else:  # advanced
-            explanation = "Syntax error"
-            suggestions = []
-
-    return {
-        "type": error_name,
-        "message": message,
-        "explanation": explanation,
-        "suggestions": suggestions,
-    }
-
-
-def _parse_node_error(stderr: str, difficulty: str = "beginner") -> dict[str, Any]:
-    """
-    Extract error type, message and (best-effort) line number from a Node.js error.
-    """
-    if not stderr:
-        return {
-            "type": None,
-            "message": "",
-            "line": None,
-            "explanation": "",
-            "suggestions": [],
-        }
-
-    lines = stderr.strip().splitlines()
-
-    # First line of the stack usually looks like "ErrorName: message"
-    first = lines[0]
-    error_name = None
-    message = ""
-    if ":" in first:
-        parts = first.split(":", 1)
-        error_name = parts[0].strip()
-        message = parts[1].strip()
-
-    line_number: int | None = None
-    # Search for "at <fn> (<file>:line:column)" patterns
-    location_pattern = re.compile(r":(\d+):\d+\)?$")
-    for line in lines:
-        match = location_pattern.search(line)
-        if match:
-            try:
-                line_number = int(match.group(1))
-                break
-            except ValueError:
-                pass
-
-    help_data = _javascript_error_help(
-        str(error_name) if error_name else "",
-        message,
-        difficulty=difficulty,
-        line=line_number,
-    )
-    help_data["line"] = line_number
-    return help_data
-
-
-def _run_node(code: str, _timeout: float = 3.0, difficulty: str = "beginner") -> dict[str, Any]:
+def _run_node(code: str, _timeout: float = 3.0) -> dict[str, Any]:
     execution = _empty_execution()
 
     execution = run_in_sandbox(
@@ -1007,12 +706,12 @@ def _run_node(code: str, _timeout: float = 3.0, difficulty: str = "beginner") ->
     )
 
     if execution["returncode"] != 0 and not execution["error"] and execution["stderr"]:
-        execution["error"] = _parse_node_error(execution["stderr"], difficulty=difficulty)
+        execution["error"] = _errors._parse_node_error(execution["stderr"])
 
     return execution
 
 
-def _analyze_python(code: str, difficulty: str = "beginner") -> tuple[list[Issue], dict[str, Any]]:
+def _analyze_python(code: str) -> tuple[list[Issue], dict[str, Any]]:
     issues: list[Issue] = []
     syntax_issues, syntax_exc = _check_syntax(code)
     issues.extend(syntax_issues)
@@ -1020,13 +719,12 @@ def _analyze_python(code: str, difficulty: str = "beginner") -> tuple[list[Issue
 
     execution = _empty_execution()
     if syntax_exc is None:
-        execution = _run_python(code, difficulty=difficulty)
+        execution = _run_python(code)
     else:
         # Mirror the syntax error into the execution block so the UI can show it
-        execution["error"] = _python_error_help(
+        execution["error"] = _errors._python_error_help(
             "SyntaxError",
             str(syntax_exc),
-            difficulty=difficulty,
             line=syntax_exc.lineno or 1,
         )
         execution["error"]["line"] = syntax_exc.lineno or 1
@@ -1038,11 +736,10 @@ def _analyze_python(code: str, difficulty: str = "beginner") -> tuple[list[Issue
 
 def _analyze_javascript(
     code: str,
-    difficulty: str = "beginner",
 ) -> tuple[list[Issue], dict[str, Any]]:
     # Reuse generic line-based checks for JavaScript as well
     issues = _line_based_checks(code)
-    execution = _run_node(code, difficulty=difficulty)
+    execution = _run_node(code)
     return issues, execution
 
 
@@ -1277,7 +974,10 @@ def _analyze_language_not_yet_supported(
         "type": "LanguageUnsupported",
         "message": f"Execution for language '{language}' is not configured on this server.",
         "line": None,
-        "explanation": "Only Python and JavaScript are currently executed. Other languages are reported statically.",  # noqa: E501
+        "explanation": (
+            "Only Python and JavaScript are currently executed. "
+            "Other languages are reported statically."
+        ),
         "suggestions": [
             "Switch to Python or JavaScript to see full compiler-style execution and explanations.",
             "Extend the backend analyzer to integrate the compiler or runtime for this language.",
@@ -1286,352 +986,7 @@ def _analyze_language_not_yet_supported(
     return issues, execution
 
 
-def _get_valid_gemini_api_key() -> str | None:
-    """Read and validate GEMINI_API_KEY from environment."""
-    api_key = (os.environ.get("GEMINI_API_KEY") or "").strip()
-
-    # Guard against accidentally quoted values from environment providers.
-    if api_key.startswith('"') and api_key.endswith('"'):
-        api_key = api_key[1:-1].strip()
-
-    if not api_key or api_key == "YOUR_API_KEY_HERE":
-        return None
-
-    return api_key
-
-
-def _extract_gemini_text(response_json: dict[str, Any]) -> str | None:
-    """Extract model text from Gemini generateContent response."""
-    candidates = response_json.get("candidates")
-    if not isinstance(candidates, list):
-        return None
-
-    for candidate in candidates:
-        if not isinstance(candidate, dict):
-            continue
-        content = candidate.get("content")
-        if not isinstance(content, dict):
-            continue
-        parts = content.get("parts")
-        if not isinstance(parts, list):
-            continue
-        for part in parts:
-            if (
-                isinstance(part, dict)
-                and isinstance(part.get("text"), str)
-                and part["text"].strip()
-            ):
-                return part["text"].strip()
-    return None
-
-
-def _map_gemini_http_error(status_code: int, body_text: str, error_message: str) -> str:
-    """Map Gemini API failures to stable app-level status codes."""
-    haystack = f"{error_message}\n{body_text}".lower()
-
-    if status_code == 403 and (  # noqa: PLR2004
-        "api has not been used" in haystack
-        or "service disabled" in haystack
-        or "is disabled" in haystack
-    ):
-        return "AI_MENTOR_API_DISABLED"
-
-    if status_code == 429 or "quota" in haystack or "rate limit" in haystack:  # noqa: PLR2004
-        return "AI_MENTOR_QUOTA_EXCEEDED"
-
-    return "AI_MENTOR_API_ERROR"
-
-
-def _ai_mentor_status_from_feedback(feedback: str) -> str:
-    """Map legacy feedback sentinels to a small stable API status."""
-    if feedback == "AI_MENTOR_DISABLED":
-        return "disabled"
-    if feedback == "AI_MENTOR_QUOTA_EXCEEDED":
-        return "quota_exceeded"
-    if feedback == "AI_MENTOR_BAD_RESPONSE":
-        return "bad_response"
-    if feedback == "AI_MENTOR_API_ERROR":
-        return "api_error"
-    return "ok"
-
-
-MAX_GLOBAL_AI_CALLS_PER_DAY = int(os.environ.get("MAX_GLOBAL_AI_CALLS_PER_DAY", "5000"))
-
-_AI_QUOTA_REDIS_PREFIX = "ai_quota:"
-
-
-def _ai_quota_redis_key() -> str:
-    return f"{_AI_QUOTA_REDIS_PREFIX}{time.strftime('%Y-%m-%d')}"
-
-
-def _check_ai_quota() -> bool:
-    """Return True if the global daily AI quota has been reached."""
-    client = None
-    try:
-        from app_pkg.extensions import get_redis_client  # noqa: PLC0415
-        client = get_redis_client()
-    except ImportError:
-        client = None
-
-    if client is not None:
-        key = _ai_quota_redis_key()
-        value = client.get(key)
-        return value is not None and int(value) >= MAX_GLOBAL_AI_CALLS_PER_DAY
-
-    return SECURITY_METRICS.get("ai_mentor_calls_made", 0) >= MAX_GLOBAL_AI_CALLS_PER_DAY
-
-
-def _increment_ai_quota() -> None:
-    """Increment the daily AI call counter. Uses Redis when available."""
-    client = None
-    try:
-        from app_pkg.extensions import get_redis_client  # noqa: PLC0415
-        client = get_redis_client()
-    except ImportError:
-        client = None
-
-    if client is not None:
-        key = _ai_quota_redis_key()
-        pipe = client.pipeline()
-        pipe.incr(key)
-        pipe.expire(key, 86400)
-        pipe.execute()
-    else:
-        SECURITY_METRICS["ai_mentor_calls_made"] = (
-            SECURITY_METRICS.get("ai_mentor_calls_made", 0) + 1
-        )
-
-
-_AI_MENTOR_CACHE: OrderedDict = OrderedDict()
-_AI_MENTOR_CACHE_SIZE = 500
-
-_logger = logging.getLogger("app_pkg")
-
-
-MAX_AI_CODE_CHARS = 10000
-
-_MENTOR_PROMPTS: dict[str, str] = {
-    "beginner": (
-        "You are a strict coding instructor helping a beginner."
-        " A student submitted code that has errors.\n"
-        "RULES YOU MUST FOLLOW:\n"
-        "- For EVERY issue you mention, you MUST reference the exact line number.\n"
-        "- Use simple, plain language that a beginner can understand.\n"
-        "- Explain what is wrong in simple terms.\n"
-        "- Give a HINT toward the exact line or concept that needs fixing.\n"
-        "- Do NOT give the corrected code.\n"
-        "- Be VERY BRIEF — max 3 sentences per error.\n"
-        "- Focus ONLY on errors that prevent the code from running."
-        " Do NOT comment on style issues (line length, indentation, trailing whitespace, TODO comments).\n\n"  # noqa: E501
-        "Detected issues:\n{error_context}\n\n"
-        "Student code ({language}) with line numbers:\n"
-        "```\n{numbered_lines}\n```"
-    ),
-    "intermediate": (
-        "You are a coding instructor helping an intermediate student."
-        " A student submitted code that has errors.\n"
-        "RULES YOU MUST FOLLOW:\n"
-        "- Explain the CONCEPT or PRINCIPLE behind each error, not the specific line details.\n"
-        "- Do NOT reference line numbers directly.\n"
-        "- Help the student understand the underlying concept that needs to be applied.\n"
-        "- Give a hint that guides without referencing specific lines.\n"
-        "- Do NOT give the corrected code.\n"
-        "- Be BRIEF and focused on conceptual understanding.\n"
-        "- Focus ONLY on errors that prevent the code from running."
-        " Do NOT comment on style issues (line length, indentation, trailing whitespace, TODO comments).\n\n"  # noqa: E501
-        "Detected issues:\n{error_context}\n\n"
-        "Student code ({language}) with line numbers:\n"
-        "```\n{numbered_lines}\n```"
-    ),
-    "advanced": (
-        "You are a coding mentor for an advanced student."
-        " A student submitted code that has errors.\n"
-        "RULES YOU MUST FOLLOW:\n"
-        "- Identify ONLY the core concepts or principles that are wrong.\n"
-        "- Do NOT provide line references, code quotes, or detailed explanations.\n"
-        "- Be VERY TERSE — list only the concept names or brief concept descriptions.\n"
-        "- Do NOT explain or give hints.\n"
-        "- Do NOT reference specific code.\n"
-        "- Focus ONLY on errors that prevent the code from running."
-        " Do NOT comment on style issues (line length, indentation, trailing whitespace, TODO comments).\n\n"  # noqa: E501
-        "Detected issues:\n{error_context}\n\n"
-        "Student code ({language}) with line numbers:\n"
-        "```\n{numbered_lines}\n```"
-    ),
-}
-
-
-def _build_mentor_prompt(code: str, language: str, difficulty: str, error_context: str) -> str:
-    safe = code[:MAX_AI_CODE_CHARS]
-    if len(code) > MAX_AI_CODE_CHARS:
-        safe += "\n... [TRUNCATED DUE TO LENGTH BUDGET]"
-    numbered = "\n".join(f"{i}: {line}" for i, line in enumerate(safe.splitlines(), start=1))
-    tmpl = _MENTOR_PROMPTS.get(difficulty, _MENTOR_PROMPTS["advanced"])
-    return tmpl.format(error_context=error_context, numbered_lines=numbered, language=language)
-
-
-_STYLE_ISSUE_CODES: set[str] = {
-    "LONG_LINE",
-    "TODO_COMMENT",
-    "TRAILING_WHITESPACE",
-    "TABS_INDENT",
-}
-
-
-def _build_error_context(execution: dict, issues: list[dict]) -> tuple[str, list[dict]]:
-    ctx = ""
-    all_errors: list[dict] = []
-
-    for iss in issues:
-        if iss.get("severity") == "error" and iss.get("code") not in _STYLE_ISSUE_CODES:
-            all_errors.append(
-                {
-                    "line": iss.get("line"),
-                    "type": iss.get("code", "ERROR"),
-                    "message": iss.get("message"),
-                    "severity": "error",
-                }
-            )
-            ctx += f"Line {iss.get('line')}: {iss.get('message')}\n"
-
-    if execution.get("error"):
-        ee = execution["error"]
-        ln = ee.get("line", "?")
-        all_errors.append(
-            {
-                "line": ln,
-                "type": ee.get("type", "RuntimeError"),
-                "message": ee.get("message", ""),
-                "explanation": ee.get("explanation", ""),
-                "severity": "error",
-            }
-        )
-        ctx += f"Line {ln}: {ee.get('type')} - {ee.get('message')}\n"
-
-    if not all_errors:
-        for warn in issues:
-            if warn.get("severity") == "warning" and warn.get("code") not in _STYLE_ISSUE_CODES:
-                ctx += f"Line {warn.get('line')}: {warn.get('message')}\n"
-
-    return ctx, all_errors
-
-
-async def _get_ai_mentorship(  # noqa: C901, PLR0911, PLR0912, PLR0915
-    code: str,
-    language: str,
-    execution: dict,
-    issues: list[dict],
-    difficulty: str = "beginner",
-) -> str:
-    if _check_ai_quota():
-        return "AI_MENTOR_QUOTA_EXCEEDED"
-
-    api_key = _get_valid_gemini_api_key()
-    if not api_key:
-        return "AI_MENTOR_DISABLED"
-
-    try:
-        error_context, all_errors = _build_error_context(execution, issues)
-
-        if all_errors or error_context:
-            cache_key_str = f"{code[:MAX_AI_CODE_CHARS]}:{language}:{difficulty}:{error_context}"
-            cache_key = hashlib.sha256(cache_key_str.encode("utf-8")).hexdigest()
-            if cache_key in _AI_MENTOR_CACHE:
-                res = _AI_MENTOR_CACHE.pop(cache_key)
-                _AI_MENTOR_CACHE[cache_key] = res
-                return res
-
-            prompt = _build_mentor_prompt(code, language, difficulty, error_context)
-
-            gemini_model = (os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash").strip()
-            endpoint = (
-                "https://generativelanguage.googleapis.com/v1beta/"
-                f"models/{urllib.parse.quote_plus(gemini_model)}:generateContent"
-            )
-            payload = {
-                "contents": [
-                    {
-                        "parts": [
-                            {
-                                "text": prompt,
-                            },
-                        ],
-                    },
-                ],
-            }
-
-            _increment_ai_quota()
-
-            _max_retries = 3
-            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
-                for _attempt in range(_max_retries):
-                    try:
-                        response = await client.post(
-                            endpoint, json=payload, headers={"X-Goog-Api-Key": api_key},
-                        )
-                        status_code = response.status_code
-                        raw_body = response.text
-                        if status_code == 429 and _attempt < _max_retries - 1:  # noqa: PLR2004
-                            backoff = 2**_attempt
-                            _logger.warning(
-                                "Gemini rate limited (429). Retrying in %ds...", backoff
-                            )
-                            await asyncio.sleep(backoff)
-                            continue
-                        break
-                    except httpx.RequestError:
-                        _logger.exception("Gemini network error")
-                        return "AI_MENTOR_API_ERROR"
-
-            if status_code < 200 or status_code >= 300:  # noqa: PLR2004
-                _logger.error("Gemini unexpected status: %s", status_code)
-                return _map_gemini_http_error(status_code, raw_body, "")
-
-            try:
-                parsed = json.loads(raw_body)
-            except json.JSONDecodeError:
-                preview = raw_body[:180].replace("\n", " ")
-                _logger.exception("Gemini JSON decode failed. body_preview=%s", preview)
-                return "AI_MENTOR_BAD_RESPONSE"
-
-            feedback_text = _extract_gemini_text(parsed)
-
-            # Usage tracking (Quota Management)
-            try:
-                usage = parsed.get("usageMetadata", {})
-                if usage:
-                    total_tokens = int(usage.get("totalTokenCount", 0))
-                    SECURITY_METRICS["ai_mentor_tokens_used"] = (
-                        SECURITY_METRICS.get("ai_mentor_tokens_used", 0) + total_tokens
-                    )
-                    _logger.info(
-                        "gemini_api_usage",
-                        extra={
-                            "prompt_tokens": usage.get("promptTokenCount", 0),
-                            "candidates_tokens": usage.get("candidatesTokenCount", 0),
-                            "total_tokens": total_tokens,
-                        },
-                    )
-            except (KeyError, TypeError, AttributeError) as e:
-                _logger.warning("Failed to parse usageMetadata", exc_info=e)
-
-            if feedback_text:
-                # Store in LRU cache
-                _AI_MENTOR_CACHE[cache_key] = feedback_text
-                if len(_AI_MENTOR_CACHE) > _AI_MENTOR_CACHE_SIZE:
-                    _AI_MENTOR_CACHE.popitem(last=False)
-                return feedback_text
-
-            return "AI_MENTOR_BAD_RESPONSE"
-    except Exception as exc:
-        _logger.exception(
-            "Unexpected Gemini error type=%s", type(exc).__name__
-        )
-        return "AI_MENTOR_API_ERROR"
-    return "LOOKS_GOOD"
-
-
-async def analyze_code(  # noqa: C901
+async def analyze_code(
     code: str,
     language: str = "python",
     difficulty: str = "beginner",
@@ -1688,10 +1043,10 @@ async def analyze_code(  # noqa: C901
     lines = code.splitlines()
 
     if language == "python":
-        issues, execution = await asyncio.to_thread(_analyze_python, code, difficulty)
+        issues, execution = await asyncio.to_thread(_analyze_python, code)
     elif language in {"javascript", "js"}:
         language = "javascript"
-        issues, execution = await asyncio.to_thread(_analyze_javascript, code, difficulty)
+        issues, execution = await asyncio.to_thread(_analyze_javascript, code)
     elif language == "java":
         issues, execution = await asyncio.to_thread(_analyze_java, code)
     elif language == "c":
@@ -1711,14 +1066,14 @@ async def analyze_code(  # noqa: C901
     if execution is None:
         execution = _empty_execution()
 
-    ai_mentor_feedback = await _get_ai_mentorship(
+    ai_mentor_feedback = await _mentorship._get_ai_mentorship(
         code,
         language,
         execution,
         issues_dicts,
-        difficulty=difficulty,
+        difficulty,
     )
-    ai_mentor_status = _ai_mentor_status_from_feedback(ai_mentor_feedback)
+    ai_mentor_status = _mentorship._ai_mentor_status_from_feedback(ai_mentor_feedback)
 
     result: dict[str, Any] = {
         "ok": True,
@@ -1732,9 +1087,7 @@ async def analyze_code(  # noqa: C901
         "ai_mentor_feedback": ai_mentor_feedback,
         "ai_mentor_status": ai_mentor_status,
     }
-    # Ensure 'execution' key always exists and is a dict (not None)
     if result.get("execution") is None:
         result["execution"] = _empty_execution()
 
-    # Return a plain dict (no wrapper) to avoid surprises for callers
     return dict(result)
