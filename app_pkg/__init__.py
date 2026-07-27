@@ -32,7 +32,7 @@ from app_pkg.blueprints.auth import auth_bp
 from app_pkg.blueprints.debug_bp import debug_bp
 from app_pkg.blueprints.static_files import static_bp
 from app_pkg.cli import register_cli
-from app_pkg.config import DevelopmentConfig, config_map
+from app_pkg.config import DevelopmentConfig, ProductionConfig, config_map
 from app_pkg.extensions import (
     csrf,
     db,
@@ -204,7 +204,7 @@ def create_app(config=None) -> Flask:
         with app.app_context():
             config_obj.validate()
 
-    is_prod = _is_production_env()
+    is_prod = _is_production_env() or isinstance(config_obj, ProductionConfig)
 
     if is_prod:
         _enforce_production_debug(app)

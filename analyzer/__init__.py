@@ -146,9 +146,6 @@ from analyzer.mentorship import (
     _extract_gemini_text as _extract_gemini_text,
 )
 from analyzer.mentorship import (
-    _get_ai_client as _get_ai_client,
-)
-from analyzer.mentorship import (
     _get_ai_mentorship as _get_ai_mentorship,
 )
 from analyzer.mentorship import (

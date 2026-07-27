@@ -151,7 +151,7 @@ def _javascript_error_help(
     }
 
 def _parse_node_error(stderr: str) -> dict[str, Any]:
-    if not stderr:
+    if not stderr or not stderr.strip():
         return {
             "type": None,
             "message": "",

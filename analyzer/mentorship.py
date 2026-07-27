@@ -16,13 +16,6 @@ from app_pkg.security.middleware import SECURITY_METRICS, _add_metric
 
 _logger = logging.getLogger(__name__)
 
-_ai_client: httpx.AsyncClient | None = None
-
-def _get_ai_client() -> httpx.AsyncClient:
-    global _ai_client
-    if _ai_client is None:
-        _ai_client = httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0))
-    return _ai_client
 
 def _get_valid_gemini_api_key() -> str | None:
     api_key = (os.environ.get("GEMINI_API_KEY") or "").strip()
@@ -69,12 +62,16 @@ def _map_gemini_http_error(status_code: int, body_text: str, error_message: str)
 def _ai_mentor_status_from_feedback(feedback: str) -> str:
     if feedback == "AI_MENTOR_DISABLED":
         return "disabled"
+    if feedback == "AI_MENTOR_API_DISABLED":
+        return "disabled"
     if feedback == "AI_MENTOR_QUOTA_EXCEEDED":
         return "quota_exceeded"
     if feedback == "AI_MENTOR_BAD_RESPONSE":
         return "bad_response"
     if feedback == "AI_MENTOR_API_ERROR":
         return "api_error"
+    if feedback.startswith("AI_MENTOR_"):
+        return "unknown"
     return "ok"
 
 MAX_GLOBAL_AI_CALLS_PER_DAY = int(os.environ.get("MAX_GLOBAL_AI_CALLS_PER_DAY", "5000"))
@@ -89,12 +86,17 @@ def _check_ai_quota() -> bool:
     try:
         from app_pkg.extensions import get_redis_client
         client = get_redis_client()
-    except ImportError:
+    except (ImportError, Exception):
         client = None
+        _logger.exception("AI quota: Redis unavailable")
     if client is not None:
         key = _ai_quota_redis_key()
-        value = client.get(key)
-        return value is not None and int(value) >= MAX_GLOBAL_AI_CALLS_PER_DAY
+        try:
+            value = client.get(key)
+            return value is not None and int(value) >= MAX_GLOBAL_AI_CALLS_PER_DAY
+        except Exception:
+            _logger.exception("AI quota: Redis get failed")
+
     return SECURITY_METRICS.get("ai_mentor_calls_made", 0) >= MAX_GLOBAL_AI_CALLS_PER_DAY
 
 def _increment_ai_quota() -> None:
@@ -102,14 +104,18 @@ def _increment_ai_quota() -> None:
     try:
         from app_pkg.extensions import get_redis_client
         client = get_redis_client()
-    except ImportError:
+    except (ImportError, Exception):
         client = None
+        _logger.exception("AI quota: Redis unavailable")
     if client is not None:
         key = _ai_quota_redis_key()
-        pipe = client.pipeline()
-        pipe.incr(key)
-        pipe.expire(key, 86400)
-        pipe.execute()
+        try:
+            pipe = client.pipeline()
+            pipe.incr(key)
+            pipe.expire(key, 86400)
+            pipe.execute()
+        except Exception:
+            _logger.exception("AI quota: Redis pipeline failed")
     else:
         _add_metric("ai_mentor_calls_made")
 
@@ -121,11 +127,11 @@ _logger = logging.getLogger("app_pkg")
 MAX_AI_CODE_CHARS = 10000
 
 _MENTOR_PROMPTS = (
-    "You are a strict coding instructor helping a beginner."
+    "You are a strict coding instructor helping a {difficulty} student."
     " A student submitted code that has errors.\n"
     "RULES YOU MUST FOLLOW:\n"
     "- For EVERY issue you mention, you MUST reference the exact line number.\n"
-    "- Use simple, plain language that a beginner can understand.\n"
+    "- Use language appropriate for a {difficulty} student.\n"
     "- Explain what is wrong in simple terms.\n"
     "- Give a HINT toward the exact line or concept that needs fixing.\n"
     "- Do NOT give the corrected code.\n"
@@ -138,13 +144,18 @@ _MENTOR_PROMPTS = (
     "```\n{numbered_lines}\n```"
 )
 
-def _build_mentor_prompt(code: str, language: str, error_context: str) -> str:
+def _build_mentor_prompt(
+    code: str, language: str, error_context: str, difficulty: str = "beginner"
+) -> str:
     safe = code[:MAX_AI_CODE_CHARS]
     if len(code) > MAX_AI_CODE_CHARS:
         safe += "\n... [TRUNCATED DUE TO LENGTH BUDGET]"
     numbered = "\n".join(f"{i}: {line}" for i, line in enumerate(safe.splitlines(), start=1))
     return _MENTOR_PROMPTS.format(
-        error_context=error_context, numbered_lines=numbered, language=language
+        error_context=error_context,
+        numbered_lines=numbered,
+        language=language,
+        difficulty=difficulty,
     )
 
 _STYLE_ISSUE_CODES: set[str] = {
@@ -188,6 +199,7 @@ async def _get_ai_mentorship(
     language: str,
     execution: dict,
     issues: list[dict],
+    difficulty: str = "beginner",
 ) -> str:
     if _check_ai_quota():
         return "AI_MENTOR_QUOTA_EXCEEDED"
@@ -203,7 +215,7 @@ async def _get_ai_mentorship(
                 res = _AI_MENTOR_CACHE.pop(cache_key)
                 _AI_MENTOR_CACHE[cache_key] = res
                 return res
-            prompt = _build_mentor_prompt(code, language, error_context)
+            prompt = _build_mentor_prompt(code, language, error_context, difficulty)
             gemini_model = (os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash").strip()
             endpoint = (
                 "https://generativelanguage.googleapis.com/v1beta/"
@@ -214,23 +226,35 @@ async def _get_ai_mentorship(
             }
             _increment_ai_quota()
             _max_retries = 3
-            client = _get_ai_client()
-            for _attempt in range(_max_retries):
-                try:
-                    response = await client.post(
-                        endpoint, json=payload, headers={"X-Goog-Api-Key": api_key},
+            deadline = asyncio.get_event_loop().time() + 30
+            async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
+                for _attempt in range(_max_retries):
+                    try:
+                        response = await client.post(
+                            endpoint, json=payload, headers={"X-Goog-Api-Key": api_key},
+                        )
+                        status_code = response.status_code
+                        raw_body = response.text
+                        if status_code == 429 and _attempt < _max_retries - 1:
+                            if asyncio.get_event_loop().time() > deadline:
+                                break
+                            backoff = 2**_attempt
+                            _logger.warning(
+                        "Gemini rate limited (429). Retrying in %ds...", backoff
                     )
-                    status_code = response.status_code
-                    raw_body = response.text
-                    if status_code == 429 and _attempt < _max_retries - 1:
+                            await asyncio.sleep(backoff)
+                            continue
+                        break
+                    except httpx.RequestError:
+                        if (
+                            asyncio.get_event_loop().time() > deadline
+                            or _attempt >= _max_retries - 1
+                        ):
+                            _logger.exception("Gemini network error")
+                            return "AI_MENTOR_API_ERROR"
                         backoff = 2**_attempt
-                        _logger.warning("Gemini rate limited (429). Retrying in %ds...", backoff)
+                        _logger.warning("Gemini network error. Retrying in %ds...", backoff)
                         await asyncio.sleep(backoff)
-                        continue
-                    break
-                except httpx.RequestError:
-                    _logger.exception("Gemini network error")
-                    return "AI_MENTOR_API_ERROR"
             if status_code < 200 or status_code >= 300:
                 _logger.error("Gemini unexpected status: %s", status_code)
                 return _map_gemini_http_error(status_code, raw_body, "")

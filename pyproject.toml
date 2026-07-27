@@ -26,7 +26,7 @@ ignore = [
 "tests/*" = ["S", "PLR", "ARG"]
 "migrations/*" = ["ALL"]
 "cli.py" = ["T201"]
-"analyzer/*" = ["C901", "PLR0911", "PLR0912", "PLR0915", "SLF001", "ARG001", "PLW0603", "PLR2004", "BLE001", "S108", "PLW1509", "PTH118", "PLC0415"]
+"analyzer/*" = ["C901", "PLR0911", "PLR0912", "PLR0915", "SLF001", "ARG001", "PLW0603", "PLR2004", "PTH118", "PLC0415"]
 "app_pkg/*" = ["SLF001"]
 
 [tool.ruff.format]

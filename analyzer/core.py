@@ -128,7 +128,7 @@ def sandbox_runtime_status() -> dict[str, Any]:
     try:
         client = docker.from_env()
         client.ping()
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         status["reason"] = f"Docker daemon unavailable: {exc}"
         return status
     status["ok"] = True
@@ -201,8 +201,8 @@ def _run_host_sandboxed(
     # Minimal environment — no secrets from parent process.
     host_env: dict[str, str] = {
         "PATH": os.environ.get("PATH", ""),
-        "HOME": os.environ.get("HOME", "/tmp"),
-        "TMPDIR": cwd or "/tmp",
+        "HOME": os.environ.get("HOME", "/tmp"),  # noqa: S108
+        "TMPDIR": cwd or "/tmp",  # noqa: S108
         "LC_ALL": "C.UTF-8",
         # Best-effort network disabling (defense-in-depth, not a guarantee).
         "NO_NETWORK": "1",
@@ -223,7 +223,7 @@ def _run_host_sandboxed(
             stderr=subprocess.PIPE,
             text=True,
             env=host_env,
-            preexec_fn=preexec,
+            preexec_fn=preexec,  # noqa: PLW1509
             cwd=cwd,
             close_fds=True,
         )
@@ -265,7 +265,7 @@ def _run_host_sandboxed(
                 "Install the missing tool or use a different language.",
             ],
         }
-    except Exception as exc:
+    except Exception as exc:  # noqa: BLE001
         execution["returncode"] = -1
         execution["stderr"] = str(exc)
 
@@ -320,8 +320,8 @@ def run_in_sandbox(
         command = [
             part.format(
                 source=f"/workspace/{source_name}",
-                output="/tmp/program",
-                classes="/tmp",
+                output="/tmp/program",  # noqa: S108
+                classes="/tmp",  # noqa: S108
                 main_class=main_class,
             )
             for part in cmd
@@ -348,7 +348,7 @@ def run_in_sandbox(
 
             try:
                 client = docker.from_env()
-            except Exception as docker_err:
+            except Exception as docker_err:  # noqa: BLE001
                 if _host_execution_allowed():
                     host_cmd = _format_host_cmd(cmd, source_path, tmp_dir, main_class)
                     return _run_host_sandboxed(host_cmd, timeout_seconds, tmp_dir)
@@ -377,13 +377,13 @@ def run_in_sandbox(
                     stdout=True,
                     stderr=True,
                     detach=True,
-                    tmpfs={"/tmp": "rw,nosuid,size=128m"},
+                    tmpfs={"/tmp": "rw,nosuid,size=128m"},  # noqa: S108
                 )
                 try:
                     try:
                         result = container.wait(timeout=timeout_seconds)
                         execution["returncode"] = result.get("StatusCode", 0) or 0
-                    except requests.exceptions.ReadTimeout:
+                    except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError):
                         with contextlib.suppress(APIError):
                             container.kill()
                         execution["timed_out"] = True
@@ -398,8 +398,7 @@ def run_in_sandbox(
                                 "Try running a smaller piece of the program or simplifying the logic.",  # noqa: E501
                             ],
                         }
-                    except Exception:
-                        execution["returncode"] = -1
+                    except Exception:  # noqa: BLE001
                         with contextlib.suppress(APIError):
                             container.kill()
                         execution["error"] = {
@@ -1062,6 +1061,7 @@ async def analyze_code(
         language,
         execution,
         issues_dicts,
+        difficulty,
     )
     ai_mentor_status = _mentorship._ai_mentor_status_from_feedback(ai_mentor_feedback)
 

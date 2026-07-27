@@ -198,9 +198,11 @@ class TestAnalyzeCode:
         ("feedback", "status"),
         [
             ("AI_MENTOR_DISABLED", "disabled"),
+            ("AI_MENTOR_API_DISABLED", "disabled"),
             ("AI_MENTOR_API_ERROR", "api_error"),
             ("AI_MENTOR_QUOTA_EXCEEDED", "quota_exceeded"),
             ("AI_MENTOR_BAD_RESPONSE", "bad_response"),
+            ("AI_MENTOR_UNKNOWN_FUTURE", "unknown"),
         ],
     )
     async def test_ai_mentor_status_maps_stable_failure_states(self, monkeypatch, feedback, status):
