@@ -9,6 +9,19 @@ import OutputPane from "./components/Output/OutputPane";
 import MentorPane from "./components/Output/MentorPane";
 import AuthModal from "./components/Auth/AuthModal";
 
+function NotFound() {
+  return (
+    <main className="not-found" role="main" aria-labelledby="nf-title">
+      <div className="not-found-code" aria-hidden="true">404</div>
+      <h1 id="nf-title" className="not-found-title">Page not found</h1>
+      <p className="not-found-desc">
+        The page you’re looking for doesn’t exist. Return to the editor and keep building.
+      </p>
+      <a href="/" className="not-found-link">Back to editor</a>
+    </main>
+  );
+}
+
 export default function App() {
   const auth = useAuth();
   const settings = useSettings();
@@ -19,8 +32,42 @@ export default function App() {
     onUnauthenticated: auth.handleUnauthenticated,
   });
 
+  const isNotFound = typeof window !== "undefined" && window.location.pathname !== "/" && window.location.pathname !== "/index.html";
+  if (isNotFound) {
+    return (
+      <ErrorBoundary>
+        <a className="skip-link" href="#main-content">Skip to content</a>
+        <div className="app-container">
+          <Toolbar
+            code={code.code}
+            language={code.language}
+            fontSize={settings.fontSize}
+            darkMode={settings.darkMode}
+            isFullscreen={settings.isFullscreen}
+            isAnalyzing={code.isAnalyzing}
+            user={auth.user}
+            onRun={code.handleRun}
+            onCycleLanguage={code.cycleLanguage}
+            onLanguageChange={(lang) => code.handleLanguageChange(lang)}
+            onIncreaseFont={settings.increaseFont}
+            onDecreaseFont={settings.decreaseFont}
+            onToggleDarkMode={settings.toggleDarkMode}
+            onToggleFullscreen={settings.toggleFullscreen}
+            onShare={code.handleShare}
+            onClearOutput={code.clearOutput}
+            onFileUploadClick={() => code.fileInputRef.current?.click()}
+            onLoginClick={() => { auth.setShowAuthModal(true); auth.setAuthTab("login"); }}
+            onLogout={auth.handleLogout}
+          />
+          <NotFound />
+        </div>
+      </ErrorBoundary>
+    );
+  }
+
   return (
     <ErrorBoundary>
+      <a className="skip-link" href="#main-content">Skip to content</a>
       <ToastContainer />
       <div className="app-container">
         {auth.showAuthModal && (
@@ -43,6 +90,8 @@ export default function App() {
           tabIndex={-1}
           ref={code.fileInputRef}
           onChange={code.handleFileChange}
+          aria-hidden="true"
+          aria-label="Upload code file"
         />
 
         <Toolbar
@@ -67,7 +116,7 @@ export default function App() {
           onLogout={auth.handleLogout}
         />
 
-        <div className="main-content">
+        <main id="main-content" className="main-content" role="main" aria-label="Code editor and output">
           <EditorPane
             code={code.code}
             language={code.language}
@@ -95,7 +144,7 @@ export default function App() {
               issues={code.issues}
             />
           </div>
-        </div>
+        </main>
       </div>
     </ErrorBoundary>
   );

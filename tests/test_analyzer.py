@@ -14,6 +14,7 @@ from analyzer import (
     _check_syntax,
     _detect_language_mismatch,
     _line_based_checks,
+    _parse_python_traceback,
     _python_error_help,
     analyze_code,
     run_in_sandbox,
@@ -135,6 +136,17 @@ class TestErrorHelp:
         """Unknown errors should get generic help."""
         help_text = _python_error_help("UnknownError", "something broke")
         assert "runtime error" in help_text["explanation"].lower()
+
+    def test_traceback_parsing_message_less_exception(self):
+        """Exceptions raised without a message should not grab 'Traceback' as type."""
+        stderr = (
+            "Traceback (most recent call last):\n"
+            '  File "test.py", line 1, in <module>\n'
+            "ValueError\n"
+        )
+        result = _parse_python_traceback(stderr)
+        assert result["type"] == "ValueError"
+        assert result["message"] == ""
 
 
 class TestAnalyzeCode:

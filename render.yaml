@@ -1,0 +1,67 @@
+services:
+  - type: web
+    name: ai-mentor-backend
+    runtime: docker
+    dockerfilePath: ./Dockerfile
+    healthCheckPath: /api/v1/health
+    plan: free
+    # Free plan works for staging only: set GUNICORN_WORKERS=1 and
+    # MAX_ANALYZE_CONCURRENCY=2 to avoid OOM (512MB, JDK+GCC image).
+    envVars:
+      - key: FLASK_ENV
+        value: production
+      # Render has no Docker daemon: native host executor is mandatory.
+      # See analyzer core run_in_sandbox -> _run_host_sandboxed fallback.
+      - key: HOST_EXECUTION_ENABLED
+        value: 1
+      # Trust Render router for X-Forwarded-* (correct IP/scheme/host
+      # behind Vercel /api proxy -> Render). Do not increase blindly.
+      - key: TRUSTED_PROXY_COUNT
+        value: 1
+      - key: GUNICORN_WORKERS
+        value: 1
+      - key: MAX_ANALYZE_CONCURRENCY
+        value: 2
+      - key: GEMINI_MODEL
+        value: gemini-2.5-flash
+      - key: PYTHON_VERSION
+        value: 3.11.0
+      - key: SECRET_KEY
+        sync: false
+      - key: JWT_SECRET_KEY
+        sync: false
+      - key: WTF_CSRF_SECRET_KEY
+        sync: false
+      - key: GEMINI_API_KEY
+        sync: false
+      # Exact Vercel frontend origin, e.g. https://ai-mentor.vercel.app
+      # Never "*": ProductionConfig.validate() rejects wildcards.
+      - key: ALLOWED_ORIGINS
+        sync: false
+      # Required in production: gates POST /api/v1/analyze via X-API-Key
+      # (401 without/invalid key). Prevents anonymous arbitrary code exec
+      # on the weaker host sandbox. No code change: existing
+      # ANALYZE_API_KEY check in app_pkg/blueprints/api/routes.py enforced.
+      - key: ANALYZE_API_KEY
+        sync: false
+      # GitHub OAuth (optional — only set if OAuth login is enabled).
+      # Callback URL registered in GitHub OAuth app must be:
+      #   https://<render-service>/api/v1/auth/github/callback
+      - key: GITHUB_CLIENT_ID
+        sync: false
+      - key: GITHUB_CLIENT_SECRET
+        sync: false
+      - key: DATABASE_URL
+        fromDatabase:
+          name: ai-mentor-db
+          property: connectionString
+      # Provision Render Key Value (Redis) via dashboard and set here.
+      # Auto-wires rate-limit DB 0 + JWT blacklist DB 1; without it the
+      # app falls back to per-worker memory:// (fragmented state).
+      - key: REDIS_URL
+        sync: false
+
+databases:
+  - name: ai-mentor-db
+    databaseName: ai_mentor
+    plan: free

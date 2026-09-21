@@ -34,7 +34,8 @@ def upgrade():
             nullable=False,
             server_default=sa.func.now(),
         ),
-        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("1")),
+        # ponytail: boolean literal default (was SQLite-only "1", rejected by PostgreSQL).
+        sa.Column("is_active", sa.Boolean(), nullable=False, server_default=sa.text("true")),
         sa.PrimaryKeyConstraint("id"),
     )
     op.create_index(op.f("ix_users_email"), "users", ["email"], unique=True)
@@ -45,14 +46,16 @@ def upgrade():
         sa.Column("id", sa.Integer(), autoincrement=True, nullable=False),
         sa.Column("user_id", sa.Integer(), nullable=True),
         sa.Column("language", sa.String(length=20), nullable=False),
-        sa.Column("had_error", sa.Boolean(), nullable=False, server_default=sa.text("0")),
+        # ponytail: boolean literal default (was SQLite-only "0", rejected by PostgreSQL).
+        sa.Column("had_error", sa.Boolean(), nullable=False, server_default=sa.text("false")),
         sa.Column("code_snippet", sa.String(length=200), nullable=True),
+        # ponytail: no index=True here; ix_audit_logs_timestamp is created
+        # explicitly below (dual definition fails on PostgreSQL).
         sa.Column(
             "timestamp",
             sa.DateTime(timezone=True),
             nullable=False,
             server_default=sa.func.now(),
-            index=True,
         ),
         sa.Column("prompt_tokens", sa.Integer(), nullable=False, server_default=sa.text("0")),
         sa.Column("completion_tokens", sa.Integer(), nullable=False, server_default=sa.text("0")),

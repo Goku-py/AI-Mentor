@@ -37,10 +37,10 @@ export default function EditorPane({
   }, [editorWrapperRef]);
 
   return (
-    <div className="editor-pane">
-      <div className="pane-header">
-        <CodeIcon /> Editor
-      </div>
+    <section className="editor-pane" aria-label="Code editor">
+      <h2 className="pane-header">
+        <CodeIcon aria-hidden="true" /> Editor
+      </h2>
       <div
         style={{
           flex: 1,
@@ -51,6 +51,8 @@ export default function EditorPane({
           display: "flex",
         }}
         className="editor-container"
+        role="group"
+        aria-label={`Code editor, language ${language}`}
       >
         <div className="line-numbers" aria-hidden="true" style={{ fontSize: fontSize + "px", minHeight: "100%" }}>
           {code.replace(/\n+$/, "").split("\n").map((_, i) => (
@@ -58,6 +60,7 @@ export default function EditorPane({
           ))}
         </div>
         <div style={{ flex: 1, position: "relative", minHeight: 0 }} ref={editorWrapperRef}>
+          <label htmlFor="code-editor-textarea" className="sr-only">Code editor</label>
           <Editor
             key={language}
             value={code}
@@ -70,6 +73,7 @@ export default function EditorPane({
                 onRun?.();
               }
             }}
+            textareaId="code-editor-textarea"
             highlight={(codeToHighlight: string) => {
               const grammar = language === "cpp" || language === "c"
                 ? Prism.languages.cpp || Prism.languages.clike
@@ -97,6 +101,6 @@ export default function EditorPane({
           />
         </div>
       </div>
-    </div>
+    </section>
   );
 }

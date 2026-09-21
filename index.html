@@ -3,10 +3,93 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>AI Code Mentor</title>
+    <meta http-equiv="X-UA-Compatible" content="IE=edge" />
+
+    <!-- Primary SEO -->
+    <title>AI Code Mentor — Run, Debug & Learn with AI</title>
+    <meta
+      name="description"
+      content="AI Code Mentor is a fast, in-browser code runner for Python, JavaScript, Java, C & C++ with instant execution, AI-powered code review and mentor feedback. Write, run and learn — no setup."
+    />
+    <meta name="keywords" content="online code editor, python runner, javascript runner, java compiler online, C++ compiler, AI code review, code mentor, learn to code" />
+    <meta name="author" content="AI Code Mentor" />
+    <meta name="robots" content="index, follow, max-image-preview:large" />
+    <link rel="canonical" href="https://example.com/" />
+    <meta name="theme-color" content="#0d1117" media="(prefers-color-scheme: dark)" />
+    <meta name="theme-color" content="#f6f8fa" media="(prefers-color-scheme: light)" />
+    <meta name="color-scheme" content="dark light" />
+
+    <!-- Icons & PWA -->
     <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
+    <link rel="apple-touch-icon" href="/favicon.svg" />
+    <link rel="manifest" href="/site.webmanifest" />
+
+    <!-- Fonts — preconnect + display=swap (no render-blocking @import) -->
+    <link rel="preconnect" href="https://fonts.googleapis.com" />
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin />
+    <link
+      rel="stylesheet"
+      href="https://fonts.googleapis.com/css2?family=Fira+Code:wght@400;500&family=Inter:wght@400;500;600&display=swap"
+    />
+
+    <!-- Open Graph -->
+    <meta property="og:type" content="website" />
+    <meta property="og:site_name" content="AI Code Mentor" />
+    <meta property="og:title" content="AI Code Mentor — Run, Debug & Learn with AI" />
+    <meta
+      property="og:description"
+      content="Write and run Python, JavaScript, Java, C & C++ in your browser. Get instant execution plus AI-powered feedback to level up your code."
+    />
+    <meta property="og:url" content="https://example.com/" />
+    <meta property="og:image" content="https://example.com/og-image.svg" />
+    <meta property="og:image:alt" content="AI Code Mentor — code editor with AI feedback" />
+    <meta property="og:image:width" content="1200" />
+    <meta property="og:image:height" content="630" />
+
+    <!-- Twitter -->
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="AI Code Mentor — Run, Debug & Learn with AI" />
+    <meta
+      name="twitter:description"
+      content="In-browser runner for Python, JS, Java, C & C++ with instant execution and AI mentor feedback."
+    />
+    <meta name="twitter:image" content="https://example.com/og-image.svg" />
+
+    <!-- Structured data -->
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "SoftwareApplication",
+        "name": "AI Code Mentor",
+        "applicationCategory": "DeveloperApplication",
+        "operatingSystem": "Web",
+        "description": "In-browser code runner for Python, JavaScript, Java, C and C++ with AI-powered code review and mentorship.",
+        "offers": { "@type": "Offer", "price": "0", "priceCurrency": "USD" },
+        "featureList": ["Run Python, JavaScript, Java, C, C++ in browser", "AI code review", "Syntax highlighting", "Instant execution"],
+        "url": "https://example.com/"
+      }
+    </script>
+    <script type="application/ld+json">
+      {
+        "@context": "https://schema.org",
+        "@type": "WebSite",
+        "name": "AI Code Mentor",
+        "url": "https://example.com/",
+        "potentialAction": {
+          "@type": "SearchAction",
+          "target": "https://example.com/?q={search_term_string}",
+          "query-input": "required name=search_term_string"
+        }
+      }
+    </script>
   </head>
   <body>
+    <noscript>
+      <div style="max-width: 640px; margin: 4rem auto; padding: 1.5rem; font-family: system-ui, sans-serif; line-height: 1.6;">
+        <h1>AI Code Mentor</h1>
+        <p>This app requires JavaScript to run the code editor and AI mentor. Please enable JavaScript and reload.</p>
+      </div>
+    </noscript>
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
   </body>

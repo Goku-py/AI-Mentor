@@ -28,11 +28,37 @@ export async function authFetch(
   }).then((r) => r.json().then((d) => ({ ok: r.ok, status: r.status, data: d })));
 }
 
-export async function tryRefreshToken(): Promise<string | null> {
+function getCookie(name: string): string | null {
+  if (typeof document === "undefined") return null;
+  const cookies = document.cookie ? document.cookie.split("; ") : [];
+  for (const c of cookies) {
+    const idx = c.indexOf("=");
+    if (idx < 0) continue;
+    if (decodeURIComponent(c.slice(0, idx)) === name) {
+      return decodeURIComponent(c.slice(idx + 1));
+    }
+  }
+  return null;
+}
+
+// ponytail: read-only cookie lookup, zero extra requests (cookie set by
+// set_refresh_cookies at login/register; cleared at logout).
+export function getRefreshCsrfToken(): string | null {
+  return getCookie("csrf_refresh_token");
+}
+
+function refreshCsrfHeaders(): Record<string, string> {
+  const csrf = getRefreshCsrfToken();
+  return csrf ? { "X-CSRF-TOKEN": csrf } : {};
+}
+
+export async function tryRefreshToken(signal?: AbortSignal): Promise<string | null> {
   try {
     const r = await fetch(`${API_BASE}/api/v1/auth/refresh`, {
       method: "POST",
+      signal,
       credentials: "include",
+      headers: { ...refreshCsrfHeaders() },
     });
     if (!r.ok) return null;
     const d: { access_token: string } = await r.json();
@@ -89,5 +115,6 @@ export function sessionRestore(signal?: AbortSignal): Promise<Response> {
     method: "POST",
     signal,
     credentials: "include",
+    headers: { ...refreshCsrfHeaders() },
   });
 }

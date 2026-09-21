@@ -78,7 +78,7 @@ def _init_extensions(app):
     _blacklist_env = os.environ.get("JWT_BLACKLIST_ENABLED", "").strip().lower()
     app.config["JWT_BLACKLIST_ENABLED"] = (
         _blacklist_env in ("1", "true", "yes")
-        or ("1" if _redis_storage_uri(1) else "0")
+        or _blacklist_storage.startswith("redis")
     )
     if _blacklist_storage.startswith("redis"):
         get_redis_client()
@@ -98,10 +98,10 @@ def _configure_talisman(app, is_prod):
             "base-uri": "'self'",
             "form-action": "'self'",
             "script-src": ["'self'"],
-            "style-src": ["'self'", "'unsafe-inline'"],
+            "style-src": ["'self'", "'unsafe-inline'", "https://fonts.googleapis.com"],
             "img-src": ["'self'", "data:"],
-            "font-src": "'self'",
-            "connect-src": "'self'",
+            "font-src": ["'self'", "https://fonts.gstatic.com", "data:"],
+            "connect-src": ["'self'", "https://fonts.googleapis.com", "https://fonts.gstatic.com"],
             "frame-ancestors": "'none'",
             "manifest-src": "'self'",
         },
