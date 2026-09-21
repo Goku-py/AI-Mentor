@@ -6,7 +6,7 @@
   "rewrites": [
     {
       "source": "/api/:path*",
-      "destination": "https://ai-mentor-backend.onrender.com/api/:path*"
+      "destination": "https://ai-mentor-fi37.onrender.com/api/:path*"
     },
     {
       "source": "/((?!assets/|api/).*)",
