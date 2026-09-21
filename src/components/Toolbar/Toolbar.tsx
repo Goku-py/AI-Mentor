@@ -46,12 +46,12 @@ export default function Toolbar({
   onLogout,
 }: ToolbarProps) {
   return (
-    <header className="header">
-      <div className="header-title">
-        <CodeIcon />
+    <header className="header" role="banner">
+      <h1 className="header-title">
+        <CodeIcon aria-hidden="true" />
         <span>AI Code Mentor</span>
-      </div>
-      <div className="controls">
+      </h1>
+      <nav className="controls" aria-label="Editor controls">
         <button className="font-btn" title="Decrease font" onClick={onDecreaseFont} aria-label="Decrease font size">A−</button>
         <button className="font-btn" title="Increase font" onClick={onIncreaseFont} aria-label="Increase font size">A+</button>
         <button title="Toggle dark/light" onClick={onToggleDarkMode} aria-label="Toggle dark mode">{darkMode ? <SunIcon /> : <MoonIcon />}</button>
@@ -77,9 +77,9 @@ export default function Toolbar({
         {user ? (
           <UserBadge user={user} onLogout={onLogout} />
         ) : (
-          <button className="auth-login-btn" onClick={onLoginClick}>Sign in</button>
+          <button className="auth-login-btn" onClick={onLoginClick} type="button">Sign in</button>
         )}
-      </div>
+      </nav>
     </header>
   );
 }

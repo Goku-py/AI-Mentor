@@ -22,11 +22,11 @@ export default function OutputPane({
   onClearMismatch,
 }: OutputPaneProps) {
   return (
-    <div className="output-pane">
-      <div className="pane-header">
-        <TerminalIcon /> Standard Output & Code Issues
-      </div>
-      <div className="pane-content" role="status" aria-live="polite">
+    <section className="output-pane" aria-label="Standard output and code issues">
+      <h2 className="pane-header">
+        <TerminalIcon aria-hidden="true" /> Standard Output &amp; Code Issues
+      </h2>
+      <div className="pane-content" role="status" aria-live="polite" aria-atomic="true">
         {mismatchInfo && (
           <div
             style={{
@@ -69,7 +69,7 @@ export default function OutputPane({
         )}
 
         {!output && !errorMsg && issues.length === 0 && (
-          <div className="placeholder-text">Outputs and issues will appear here when you run code.</div>
+          <div className="placeholder-text" role="note">Outputs and issues will appear here when you run code.</div>
         )}
 
         {issues.filter((i) => i.severity === "error").length > 0 && (
@@ -111,14 +111,14 @@ export default function OutputPane({
         )}
 
         {errorMsg && (
-          <div className="error-text" role="alert">
-            <div style={{ fontWeight: 600, marginBottom: "0.5rem", color: "#ff7b72" }}>
+          <div className="error-banner" role="alert">
+            <div style={{ fontWeight: 600, marginBottom: "0.5rem" }}>
               Compiler Error / Exception:
             </div>
             {errorMsg}
           </div>
         )}
       </div>
-    </div>
+    </section>
   );
 }

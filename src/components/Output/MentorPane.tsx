@@ -38,13 +38,20 @@ export default function MentorPane({
   issues,
 }: MentorPaneProps) {
   return (
-    <div className="mentor-pane">
-      <div className="pane-header accent-text">
-        <SparklesIcon /> AI Mentor Feedback
-      </div>
-      <div className="pane-content mentor-content" role="status" aria-live="polite">
+    <section className="mentor-pane" aria-label="AI mentor feedback">
+      <h2 className="pane-header accent-text">
+        <SparklesIcon aria-hidden="true" /> AI Mentor Feedback
+      </h2>
+      <div className="pane-content mentor-content" role="status" aria-live="polite" aria-atomic="true">
         {isAnalyzing ? (
-          <div className="placeholder-text">Analyzing code ...</div>
+          <div className="placeholder-text" role="status" aria-label="Analyzing code">
+            <div className="loading-skeleton" aria-hidden="true" style={{ width: "100%", maxWidth: 320 }}>
+              <div className="skeleton-line" style={{ width: "92%" }} />
+              <div className="skeleton-line" style={{ width: "78%" }} />
+              <div className="skeleton-line" style={{ width: "85%" }} />
+            </div>
+            Analyzing code…
+          </div>
         ) : aiMentorStatus !== "ok" ? (
           <div className="placeholder-text" style={{ color: "var(--warning)" }}>
             <SparklesIcon />
@@ -73,6 +80,6 @@ export default function MentorPane({
           </div>
         )}
       </div>
-    </div>
+    </section>
   );
 }

@@ -21,5 +21,17 @@ export default defineConfig({
   build: {
     outDir: "dist",
     emptyOutDir: true,
+    cssCodeSplit: true,
+    cssMinify: true,
+    sourcemap: false,
+    chunkSizeWarningLimit: 600,
+    rollupOptions: {
+      output: {
+        manualChunks: (id) => {
+          if (id.includes("node_modules/prismjs")) return "prism";
+          if (id.includes("node_modules/react")) return "vendor-react";
+        },
+      },
+    },
   },
 });
