@@ -5,7 +5,7 @@
 [![Flask](https://img.shields.io/badge/Flask-3.x-000000?style=for-the-badge&logo=flask&logoColor=white)](https://flask.palletsprojects.com/)
 [![Gemini](https://img.shields.io/badge/Google%20Gemini-AI%20Powered-4285F4?style=for-the-badge&logo=google&logoColor=white)](https://ai.google.dev/)
 [![License](https://img.shields.io/badge/License-MIT-green?style=for-the-badge)](LICENSE)
-[![Live Demo](https://img.shields.io/badge/Live%20Demo-ai--mentor.railway.app-brightgreen?style=for-the-badge)](https://ai-mentor.up.railway.app)
+[![Live Demo](https://img.shields.io/badge/Live%20Demo-ai--mentor--three--cyan.vercel.app-brightgreen?style=for-the-badge)](https://ai-mentor-three-cyan.vercel.app)
 
 > **AI Code Mentor** is a coding practice tool for students. You write code, run it, and if something goes wrong — the AI explains *what* went wrong and gives you a **hint** to fix it yourself. It never just hands you the answer.
 

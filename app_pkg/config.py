@@ -153,7 +153,7 @@ class ProductionConfig(BaseConfig):
             msg = (
                 "CRITICAL ERROR: FLASK_DEBUG env var is set to a truthy value in Production. "
                 "This enables the Werkzeug debugger, which allows arbitrary code execution. "
-                "Delete the FLASK_DEBUG env var from Railway dashboard."
+                "Delete the FLASK_DEBUG env var from the hosting dashboard."
             )
             raise RuntimeError(msg)
 
@@ -200,7 +200,7 @@ class ProductionConfig(BaseConfig):
                 continue
             if "${{" in uri:
                 msg = (
-                    f"CRITICAL ERROR: {name} has unresolved Railway ref ({uri}). "
+                    f"CRITICAL ERROR: {name} has unresolved platform ref ({uri}). "
                     "Provision Redis (New → Database → Redis) or "
                     f"delete {name} from env vars (app auto-detects REDIS_URL)."
                 )
@@ -208,7 +208,7 @@ class ProductionConfig(BaseConfig):
             if uri.startswith("/"):
                 msg = (
                     f"CRITICAL ERROR: {name} starts with '/' ({uri}). "
-                    "Unresolved Railway ${{Redis.REDIS_URL}} — Redis plugin not linked. "
+                    "Unresolved ${{Redis.REDIS_URL}} reference — Redis service not linked. "
                     "Delete this env var — the app auto-detects REDIS_URL."
                 )
                 raise RuntimeError(msg)
@@ -233,7 +233,7 @@ class ProductionConfig(BaseConfig):
             current_app.logger.warning(
                 "Production: No REDIS_URL detected. Rate limits are per-worker "
                 "(4 workers x 10 req/min = 40 req/min effective). "
-                "Add Redis plugin in Railway dashboard for global rate limiting."
+                "Provision a Redis service and set REDIS_URL for global rate limiting."
             )
         elif not _rate_set:
             current_app.logger.info(

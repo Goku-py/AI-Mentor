@@ -170,7 +170,7 @@ def _host_execution_allowed() -> bool:
 
     Host execution does NOT provide network isolation — the child can
     open sockets despite the cleared proxy vars (defense-in-depth only).
-    Accepted risk: authenticated users, Railway egress restrictions limit
+    Accepted risk: authenticated users; API-key gating and rate limits limit
     blast radius.
     """
     return os.environ.get("HOST_EXECUTION_ENABLED", "").strip() == "1"
@@ -192,7 +192,7 @@ def _run_host_sandboxed(
     .. warning::
        Does NOT provide network isolation.  The child can open sockets
        despite the cleared proxy vars (defense-in-depth only).
-       Accepted risk: authenticated users, Railway egress restrictions.
+       Accepted risk: authenticated users; API-key gating and rate limits.
     """
     _logger.warning(
         "Host execution fallback — code runs natively without container isolation."

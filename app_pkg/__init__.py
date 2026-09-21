@@ -127,7 +127,7 @@ def _enforce_production_debug(app):
     if os.environ.get("FLASK_DEBUG", "").strip().lower() in {"1", "true"}:
         app.logger.warning(
             "FLASK_DEBUG env var is set but the app is in production mode. "
-            "Forcing DEBUG=False. Delete FLASK_DEBUG from Railway dashboard."
+            "Forcing DEBUG=False. Delete FLASK_DEBUG from the hosting dashboard."
         )
     app.debug = False
     app.env = "production"
