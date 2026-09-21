@@ -231,8 +231,8 @@ class ProductionConfig(BaseConfig):
 
         if not _has_redis:
             current_app.logger.warning(
-                "Production: No REDIS_URL detected. Rate limits are per-worker "
-                "(4 workers x 10 req/min = 40 req/min effective). "
+                "Production: No REDIS_URL detected. Rate limits are process-local "
+                "(per-worker memory). "
                 "Provision a Redis service and set REDIS_URL for global rate limiting."
             )
         elif not _rate_set:
@@ -246,8 +246,8 @@ class ProductionConfig(BaseConfig):
             )
         elif not _has_redis and _blacklist_enabled not in {"1", "true", "yes"}:
             current_app.logger.warning(
-                "Production: JWT_BLACKLIST_ENABLED is not set. "
-                "Logout does not invalidate JWT tokens until Redis is provisioned."
+                "Production: JWT revocation is process-local (cleared on worker restart). "
+                "Set REDIS_URL for durable global revocation."
             )
 
 
