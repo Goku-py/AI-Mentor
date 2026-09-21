@@ -236,7 +236,13 @@ def analyze():  # noqa: C901, PLR0911, PLR0912, PLR0915
 
     required_api_key = (os.environ.get("ANALYZE_API_KEY") or "").strip()
     provided_api_key = request.headers.get("X-API-Key", "").strip()
-    if required_api_key and not secrets.compare_digest(required_api_key, provided_api_key):
+    # ponytail: a valid JWT already authenticated the caller above, so the
+    # server-side shared secret is only required of anonymous callers.
+    if (
+        required_api_key
+        and current_user_id is None
+        and not secrets.compare_digest(required_api_key, provided_api_key)
+    ):
         _add_metric("auth_failures")
         return jsonify({"ok": False, "error": "Unauthorized. Missing or invalid API key."}), 401
 

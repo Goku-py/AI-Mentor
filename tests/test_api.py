@@ -193,6 +193,53 @@ class TestAnalyzeEndpoint:
         )
         assert with_auth.status_code == 200
 
+    def test_analyze_rejects_wrong_api_key_anonymous(self, client, monkeypatch):
+        """Anonymous callers with an incorrect X-API-Key still get 401."""
+        monkeypatch.setenv("ANALYZE_API_KEY", "test-api-key")
+        response = client.post(
+            "/api/v1/analyze",
+            data=json.dumps({"code": 'print("hello")', "language": "python"}),
+            content_type="application/json",
+            headers={"X-API-Key": "wrong-key"},
+        )
+        assert response.status_code == 401
+
+    def test_analyze_allows_authenticated_without_api_key(self, client, auth_headers, monkeypatch):
+        """A valid JWT satisfies /analyze auth even without X-API-Key."""
+        monkeypatch.setenv("ANALYZE_API_KEY", "test-api-key")
+        response = client.post(
+            "/api/v1/analyze",
+            data=json.dumps({"code": 'print("hello")', "language": "python"}),
+            content_type="application/json",
+            headers=auth_headers,
+        )
+        assert response.status_code == 200
+
+    def test_analyze_allows_authenticated_with_wrong_api_key(
+        self, client, auth_headers, monkeypatch
+    ):
+        """Authenticated callers never need to know the server-side API key."""
+        monkeypatch.setenv("ANALYZE_API_KEY", "test-api-key")
+        headers = {**auth_headers, "X-API-Key": "wrong-key"}
+        response = client.post(
+            "/api/v1/analyze",
+            data=json.dumps({"code": 'print("hello")', "language": "python"}),
+            content_type="application/json",
+            headers=headers,
+        )
+        assert response.status_code == 200
+
+    def test_analyze_rejects_invalid_jwt_without_api_key(self, client, monkeypatch):
+        """An invalid JWT is unauthorized, with or without the API-key gate."""
+        monkeypatch.setenv("ANALYZE_API_KEY", "test-api-key")
+        response = client.post(
+            "/api/v1/analyze",
+            data=json.dumps({"code": 'print("hello")', "language": "python"}),
+            content_type="application/json",
+            headers={"Authorization": "Bearer invalid-token"},
+        )
+        assert response.status_code in (401, 422)
+
     def test_analyze_blocks_abuse_pattern(self, client):
         """Analyze endpoint should block obviously dangerous payload patterns."""
         response = client.post(
