@@ -33,10 +33,8 @@ class SafeResult(dict):
 
 try:
     import docker
-    from docker.errors import APIError, ContainerError, DockerException
 except ImportError:
     docker = None
-    APIError = ContainerError = DockerException = Exception
 
 
 @dataclass
@@ -81,17 +79,19 @@ def verify_tools() -> dict[str, bool]:
     return tools
 
 
-def _sandbox_image(language: str, fallback: str) -> str:
+def _sandbox_image(language: str) -> str | None:
     """Resolve sandbox image from Flask config (pinned by SHA256 digest).
 
-    Falls back to the provided *fallback* when outside an app context
-    (e.g. during import-time tool verification).
+    Returns ``None`` when the config is unreachable (no app context) or the
+    language has no configured image.  Callers must fail closed in that case:
+    falling back to an unpinned tag would silently defeat the digest pinning
+    that ProductionConfig.validate() enforces.
     """
     try:
-        images = current_app.config.get("SANDBOX_IMAGES", {})
-    except RuntimeError:
-        return fallback
-    return images.get(language, fallback)
+        images = current_app.config["SANDBOX_IMAGES"]
+    except (RuntimeError, KeyError, TypeError):
+        return None
+    return images.get(language) or None
 
 
 def _empty_execution() -> dict[str, Any]:
@@ -161,6 +161,17 @@ def _sandbox_unavailable_execution(message: str, explanation: str) -> dict[str, 
     return execution
 
 
+_UNPINNED_IMAGE_ARGS = (
+    "No pinned sandbox image is configured for this language on this server.",
+    "Sandbox images must be configured in SANDBOX_IMAGES with an @sha256: digest.",
+)
+
+
+def _image_unavailable_execution() -> dict[str, Any]:
+    """Fail closed: an unconfigured/unpinned image is never substituted."""
+    return _sandbox_unavailable_execution(*_UNPINNED_IMAGE_ARGS)
+
+
 def _host_execution_allowed() -> bool:
     """True when HOST_EXECUTION_ENABLED=1 env var is set.
 
@@ -170,10 +181,16 @@ def _host_execution_allowed() -> bool:
 
     Host execution does NOT provide network isolation — the child can
     open sockets despite the cleared proxy vars (defense-in-depth only).
-    Accepted risk: authenticated users; API-key gating and rate limits limit
-    blast radius.
+
+    Reads config, not os.environ, making this a second enforcement layer
+    behind ProductionConfig.validate(): production sets the flag False
+    unconditionally and refuses to boot when HOST_EXECUTION_ENABLED=1.
     """
-    return os.environ.get("HOST_EXECUTION_ENABLED", "").strip() == "1"
+    try:
+        return bool(current_app.config.get("ALLOW_HOST_EXECUTION", False))
+    except RuntimeError:
+        # No app context (direct import in unit tests): fall back to the env var.
+        return os.environ.get("HOST_EXECUTION_ENABLED", "").strip() == "1"
 
 
 def _run_host_sandboxed(
@@ -394,7 +411,7 @@ def run_in_sandbox(
                             _raise_deadline_exceeded()
                         execution["returncode"] = result.get("StatusCode", 0) or 0
                     except (requests.exceptions.ReadTimeout, requests.exceptions.ConnectionError):
-                        with contextlib.suppress(APIError):
+                        with contextlib.suppress(Exception):
                             container.kill()
                         execution["timed_out"] = True
                         execution["returncode"] = -1
@@ -409,7 +426,7 @@ def run_in_sandbox(
                             ],
                         }
                     except Exception:  # noqa: BLE001
-                        with contextlib.suppress(APIError):
+                        with contextlib.suppress(Exception):
                             container.kill()
                         execution["error"] = {
                             "type": "DockerError",
@@ -423,11 +440,11 @@ def run_in_sandbox(
 
                     try:
                         stdout_bytes = container.logs(stdout=True, stderr=False)
-                    except APIError:
+                    except Exception:  # noqa: BLE001
                         stdout_bytes = b""
                     try:
                         stderr_bytes = container.logs(stdout=False, stderr=True)
-                    except APIError:
+                    except Exception:  # noqa: BLE001
                         stderr_bytes = b""
 
                     stdout_text = (
@@ -448,7 +465,7 @@ def run_in_sandbox(
                 finally:
                     with contextlib.suppress(Exception):
                         container.remove(force=True)
-            except ContainerError as exc:
+            except Exception as exc:  # noqa: BLE001
                 stdout_text = ""
                 stderr_text = ""
                 if getattr(exc, "stdout", None) is not None:
@@ -479,12 +496,7 @@ def run_in_sandbox(
                     ],
                 }
                 return execution
-            except (APIError, DockerException) as exc:
-                return _sandbox_unavailable_execution(
-                    str(exc),
-                    "Sandbox startup failed.",
-                )
-    except (APIError, DockerException) as exc:
+    except Exception as exc:  # noqa: BLE001
         execution["stderr"] = str(exc)
         execution["error"] = {
             "type": "DockerAPIError",
@@ -508,7 +520,15 @@ def run_in_sandbox(
 #   - importlib, pkgutil, zipimport: dynamic import escape
 #   - pty, signal, fcntl, termios: terminal/process control
 #   - pickle, shelve, marshal: arbitrary code deserialisation
-def _check_syntax(code: str) -> tuple[list[Issue], SyntaxError | None]:
+def _check_syntax(code: str, language: str = "python") -> tuple[list[Issue], SyntaxError | None]:
+    """Parse *code* with Python's ast module.
+
+    Only Python source can be parsed this way; running it over JavaScript,
+    Java or C source fabricates SYNTAX_ERROR issues out of valid programs, so
+    non-Python input reports nothing here and is left to the real compiler.
+    """
+    if (language or "python").strip().lower() not in {"python", "py"}:
+        return [], None
     issues: list[Issue] = []
     syntax_exc: SyntaxError | None = None
     try:
@@ -677,13 +697,15 @@ def _detect_language_mismatch(code: str, selected_language: str) -> dict[str, st
     return mismatch(detected)
 
 
-def _run_python(code: str, _timeout: float = 3.0) -> dict[str, Any]:
-    execution = _empty_execution()
+def _run_python(code: str) -> dict[str, Any]:
+    image = _sandbox_image("python")
+    if image is None:
+        return _image_unavailable_execution()
 
     execution = run_in_sandbox(
         code,
         "python",
-        _sandbox_image("python", "python:3.11-slim"),
+        image,
         ["python", "{source}"],
         timeout=10,
     )
@@ -694,13 +716,15 @@ def _run_python(code: str, _timeout: float = 3.0) -> dict[str, Any]:
     return execution
 
 
-def _run_node(code: str, _timeout: float = 3.0) -> dict[str, Any]:
-    execution = _empty_execution()
+def _run_node(code: str) -> dict[str, Any]:
+    image = _sandbox_image("javascript")
+    if image is None:
+        return _image_unavailable_execution()
 
     execution = run_in_sandbox(
         code,
         "javascript",
-        _sandbox_image("javascript", "node:18-slim"),
+        image,
         ["node", "{source}"],
         timeout=10,
     )
@@ -860,45 +884,48 @@ def _run_gcc(
     language_label: str,
     compiler: str,
     _source_name: str,
-    _timeout: float = 3.0,
 ) -> tuple[list[Issue], dict[str, Any]]:
     compile_issues: list[Issue] = []
+    image = _sandbox_image("gcc")
+    if image is None:
+        return compile_issues, _image_unavailable_execution()
+
     execution = run_in_sandbox(
         source_code,
         language_label,
-        _sandbox_image("gcc", "gcc:12"),
+        image,
         ["sh", "-c", f"{compiler} {{source}} -o {{output}} && {{output}}"],
         timeout=10,
     )
 
     if execution["returncode"] != 0 and not execution["error"] and execution.get("stderr"):
-            parsed = _parse_gcc_output(execution["stderr"], language_label)
-            if parsed:
-                compile_issues.extend(parsed)
-                execution["error"] = {
-                    "type": "CompileError",
-                    "message": "Compilation failed. See errors below.",
-                    "line": None,
-                    "explanation": f"The {language_label.upper()} compiler reported one or more errors.",  # noqa: E501
-                    "suggestions": [
-                        "Read each compiler error from top to bottom; often the first message is the most important.",  # noqa: E501
-                        "Fix the earliest error, then recompile to see if later errors disappear.",
-                    ],
-                }
-            elif not execution.get("error"):
-                execution["error"] = {
-                    "type": "RuntimeError",
-                    "message": "The program exited with a non-zero status code.",
-                    "line": None,
-                    "explanation": (
-                        "A non-zero exit code usually means the program hit a runtime error such"
-                        " as division by zero, invalid memory access, or an explicit `return 1`."
-                    ),
-                    "suggestions": [
-                        "Add print statements before the suspected failing line to see which values are being used.",  # noqa: E501
-                        "Check for invalid array indices, null pointers, or divisions where the denominator may be zero.",  # noqa: E501
-                    ],
-                }
+        parsed = _parse_gcc_output(execution["stderr"], language_label)
+        if parsed:
+            compile_issues.extend(parsed)
+            execution["error"] = {
+                "type": "CompileError",
+                "message": "Compilation failed. See errors below.",
+                "line": None,
+                "explanation": f"The {language_label.upper()} compiler reported one or more errors.",  # noqa: E501
+                "suggestions": [
+                    "Read each compiler error from top to bottom; often the first message is the most important.",  # noqa: E501
+                    "Fix the earliest error, then recompile to see if later errors disappear.",
+                ],
+            }
+        elif not execution.get("error"):
+            execution["error"] = {
+                "type": "RuntimeError",
+                "message": "The program exited with a non-zero status code.",
+                "line": None,
+                "explanation": (
+                    "A non-zero exit code usually means the program hit a runtime error such"
+                    " as division by zero, invalid memory access, or an explicit `return 1`."
+                ),
+                "suggestions": [
+                    "Add print statements before the suspected failing line to see which values are being used.",  # noqa: E501
+                    "Check for invalid array indices, null pointers, or divisions where the denominator may be zero.",  # noqa: E501
+                ],
+            }
 
     return compile_issues, execution
 
@@ -917,17 +944,21 @@ def _analyze_cpp(code: str) -> tuple[list[Issue], dict[str, Any]]:
     return issues, execution
 
 
-def _analyze_java(code: str, _timeout: float = 3.0) -> tuple[list[Issue], dict[str, Any]]:
+def _analyze_java(code: str) -> tuple[list[Issue], dict[str, Any]]:
     style_issues = _line_based_checks(code)
     compile_issues: list[Issue] = []
 
     match = re.search(r"public\s+(?:final\s+)?class\s+(\w+)", code)
     _class_name = match.group(1) if match else "Main"
 
+    image = _sandbox_image("java")
+    if image is None:
+        return style_issues, _image_unavailable_execution()
+
     execution = run_in_sandbox(
         code,
         "java",
-        _sandbox_image("java", "openjdk:17-slim"),
+        image,
         ["sh", "-c", "javac -d {classes} {source} && java -cp {classes} {main_class}"],
         timeout=10,
     )
@@ -989,7 +1020,6 @@ def _analyze_language_not_yet_supported(
 async def analyze_code(
     code: str,
     language: str = "python",
-    difficulty: str = "beginner",
 ) -> dict[str, Any]:
     """
     Analyze source code and return a structured result.
@@ -998,7 +1028,6 @@ async def analyze_code(
     Args:
         code: The source code to analyze
         language: Programming language (python, javascript, java, c, cpp)
-        difficulty: "beginner", "intermediate", or "advanced"
     """
     if not isinstance(code, str):
         msg = "code must be a string"
@@ -1071,7 +1100,6 @@ async def analyze_code(
         language,
         execution,
         issues_dicts,
-        difficulty,
     )
     ai_mentor_status = _mentorship._ai_mentor_status_from_feedback(ai_mentor_feedback)
 

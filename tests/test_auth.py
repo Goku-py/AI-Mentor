@@ -14,6 +14,7 @@ The 'client' fixture is provided by tests/conftest.py (DB in-memory, CSRF off).
 from unittest.mock import Mock, patch
 
 import requests
+from werkzeug.security import check_password_hash
 
 VALID_EMAIL = "auth_test@example.local"
 VALID_PASS = "ValidPass1!"
@@ -141,6 +142,30 @@ class TestLogin:
             json={"email": "nobody@example.local", "password": VALID_PASS},
         )
         assert r.status_code == 401
+
+    def test_login_unknown_email_still_runs_a_hash_comparison(self, client):
+        """Unknown emails must cost the same as wrong passwords (no enumeration)."""
+        with patch(
+            "app_pkg.blueprints.auth.routes.check_password_hash",
+            wraps=check_password_hash,
+        ) as spy:
+            r = client.post(
+                "/api/v1/auth/login",
+                json={"email": "nobody@example.local", "password": VALID_PASS},
+            )
+        assert r.status_code == 401
+        assert spy.call_count == 1
+
+        # Same generic body as the wrong-password case.
+        known = client.post(
+            "/api/v1/auth/register", json={"email": VALID_EMAIL, "password": VALID_PASS}
+        )
+        assert known.status_code == 201
+        wrong = client.post(
+            "/api/v1/auth/login", json={"email": VALID_EMAIL, "password": "wrongpass99!"}
+        )
+        assert wrong.status_code == 401
+        assert wrong.get_json() == r.get_json()
 
     def test_login_missing_fields_returns_400(self, client):
         """Empty body returns 400 (not 500)."""
@@ -296,23 +321,11 @@ class TestGithubOAuth:
         with client.session_transaction() as sess:
             sess["github_oauth_state"] = "expected-state"
 
-        token_resp = Mock()
-        token_resp.ok = True
-        token_resp.json.return_value = {"access_token": "gh-access"}
-
-        user_resp = Mock()
-        user_resp.ok = True
-        user_resp.json.return_value = {"id": 98765, "email": "oauth@example.local"}
-
-        emails_resp = Mock()
-        emails_resp.ok = True
-        emails_resp.json.return_value = [{"email": "oauth@example.local", "primary": True}]
-
         with (
-            patch("app_pkg.blueprints.auth.routes.requests.post", return_value=token_resp),
+            patch("app_pkg.blueprints.auth.routes.requests.post", return_value=_token_resp()),
             patch(
                 "app_pkg.blueprints.auth.routes.requests.get",
-                side_effect=[user_resp, emails_resp],
+                side_effect=[_user_resp(), _emails_resp(verified=True)],
             ),
         ):
             r = client.get("/api/v1/auth/github/callback?code=abc&state=expected-state")
@@ -322,3 +335,99 @@ class TestGithubOAuth:
         assert location == "http://localhost:5173"
         assert "token=" not in location
         assert "refresh_token_cookie" in r.headers.get("Set-Cookie", "")
+
+
+def _token_resp():
+    resp = Mock()
+    resp.ok = True
+    resp.json.return_value = {"access_token": "gh-access"}
+    return resp
+
+
+def _user_resp(github_id=98765, email="oauth@example.local"):
+    resp = Mock()
+    resp.ok = True
+    resp.json.return_value = {"id": github_id, "email": email}
+    return resp
+
+
+def _emails_resp(verified, email="oauth@example.local"):
+    resp = Mock()
+    resp.ok = True
+    resp.json.return_value = [{"email": email, "primary": True, "verified": verified}]
+    return resp
+
+
+# ---------------------------------------------------------------------------
+# GitHub account linking (account-takeover prevention)
+# ---------------------------------------------------------------------------
+class TestGithubAccountLinking:
+    """A GitHub identity must never take over an existing password account."""
+
+    @staticmethod
+    def _github_env(monkeypatch):
+        monkeypatch.setenv("GITHUB_CLIENT_ID", "client-123")
+        monkeypatch.setenv("GITHUB_CLIENT_SECRET", "secret-123")
+        monkeypatch.setenv("ALLOWED_ORIGINS", "http://localhost:5173")
+
+    def _callback(self, client, emails, github_id=98765):
+        with client.session_transaction() as sess:
+            sess["github_oauth_state"] = "expected-state"
+
+        with (
+            patch("app_pkg.blueprints.auth.routes.requests.post", return_value=_token_resp()),
+            patch(
+                "app_pkg.blueprints.auth.routes.requests.get",
+                side_effect=[_user_resp(github_id=github_id), emails],
+            ),
+        ):
+            return client.get("/api/v1/auth/github/callback?code=abc&state=expected-state")
+
+    def test_verified_email_creates_new_user(self, client, monkeypatch):
+        """No existing account → a fresh student user is created and logged in."""
+        self._github_env(monkeypatch)
+        r = self._callback(client, _emails_resp(verified=True))
+
+        assert r.status_code == 302
+        assert "refresh_token_cookie" in r.headers.get("Set-Cookie", "")
+
+    def test_verified_email_matching_password_account_returns_403(
+        self, client, monkeypatch
+    ):
+        """An existing password account is never silently linked to GitHub."""
+        self._github_env(monkeypatch)
+        client.post(
+            "/api/v1/auth/register",
+            json={"email": "oauth@example.local", "password": VALID_PASS},
+        )
+
+        r = self._callback(client, _emails_resp(verified=True))
+
+        assert r.status_code == 403
+        assert "already exists" in r.get_json()["error"]
+
+        # The existing account must be untouched: still password-only.
+        login = client.post(
+            "/api/v1/auth/login",
+            json={"email": "oauth@example.local", "password": VALID_PASS},
+        )
+        assert login.status_code == 200
+
+    def test_unverified_github_email_is_rejected(self, client, monkeypatch):
+        """An unverified (attacker-chosen) GitHub email must not be accepted."""
+        self._github_env(monkeypatch)
+        r = self._callback(client, _emails_resp(verified=False))
+
+        assert r.status_code == 400
+        assert "verified" in r.get_json()["error"].lower()
+
+    def test_github_identity_reuse_does_not_need_email_match(self, client, monkeypatch):
+        """A returning GitHub user is matched on github_id, not on email."""
+        self._github_env(monkeypatch)
+        first = self._callback(client, _emails_resp(verified=True))
+        assert first.status_code == 302
+
+        second = self._callback(
+            client, _emails_resp(verified=True, email="changed@example.local")
+        )
+        assert second.status_code == 302

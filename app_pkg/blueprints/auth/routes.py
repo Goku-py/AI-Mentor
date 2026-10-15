@@ -35,6 +35,7 @@ from flask_jwt_extended import (
     set_refresh_cookies,
     unset_jwt_cookies,
 )
+from werkzeug.security import check_password_hash, generate_password_hash
 
 from app_pkg.extensions import csrf, jwt_blacklist_add, limiter
 from app_pkg.utils import coerce_jwt_identity
@@ -43,6 +44,14 @@ from models_pkg import User, db
 auth_bp = Blueprint("auth", __name__, url_prefix="/api/v1/auth")
 
 _EMAIL_RE = re.compile(r"^[a-zA-Z0-9_.+-]+@[a-zA-Z0-9-]+\.[a-zA-Z0-9-.]+$")
+
+# Burned against unknown emails so a missing account costs the same time as a
+# wrong password, closing the user-enumeration timing oracle in POST /login.
+_DUMMY_PASSWORD_HASH = generate_password_hash(secrets.token_urlsafe(32))
+
+# Returned by _find_or_create_github_user() when the email already belongs to a
+# password account — never auto-link a GitHub identity to one.
+_PASSWORD_ACCOUNT_CONFLICT = object()
 
 
 def _validate_email(email: str) -> str | None:
@@ -66,8 +75,8 @@ def _validate_password(password: str) -> str | None:
 
 
 def _make_tokens(user: User) -> tuple[str, str]:
-    additional_claims = {"role": user.role, "email": user.email}
-    access_token = create_access_token(identity=str(user.id), additional_claims=additional_claims)
+    # No PII in the access token: /me reads role and email from the database.
+    access_token = create_access_token(identity=str(user.id))
     refresh_token = create_refresh_token(identity=str(user.id))
     return access_token, refresh_token
 
@@ -132,7 +141,14 @@ def login():
     if user and user.is_locked():
         return jsonify({"ok": False, "error": "Account is temporarily locked due to too many failed login attempts. Try again later."}), 423  # noqa: E501
 
-    if not user or not user.check_password(password):
+    # Hash comparison runs for both branches so response time does not reveal
+    # whether the email exists.
+    password_ok = (
+        check_password_hash(_DUMMY_PASSWORD_HASH, password)
+        if user is None
+        else user.check_password(password)
+    )
+    if not password_ok:
         # Increment failed attempts if user exists
         if user:
             user.increment_login_attempts()
@@ -234,13 +250,16 @@ def github_login():
 
 
 def _exchange_github_token(code: str) -> str | None:
+    data = {
+        "client_id": os.environ.get("GITHUB_CLIENT_ID", ""),
+        "client_secret": os.environ.get("GITHUB_CLIENT_SECRET", ""),
+        "code": code,
+    }
+    if not data["client_id"] or not data["client_secret"]:
+        return None
     resp = requests.post(
         "https://github.com/login/oauth/access_token",
-        data={
-            "client_id": os.environ["GITHUB_CLIENT_ID"],
-            "client_secret": os.environ["GITHUB_CLIENT_SECRET"],
-            "code": code,
-        },
+        data=data,
         headers={"Accept": "application/json"},
         timeout=10,
     )
@@ -268,30 +287,43 @@ def _fetch_github_user(access_token: str) -> dict | None:
         return None
 
 
-def _fetch_primary_email(access_token: str, fallback_email: str | None) -> str | None:
+def _fetch_primary_email(access_token: str) -> str | None:
+    """Return GitHub's primary *verified* email address, or None.
+
+    An unverified address is user-supplied on GitHub and therefore
+    attacker-controllable — it must never be used to link identities.
+    """
     headers = {"Authorization": f"token {access_token}"}
     try:
         resp = requests.get("https://api.github.com/user/emails", headers=headers, timeout=10)
     except requests.RequestException:
-        return fallback_email
+        return None
     if not resp.ok:
-        return fallback_email
+        return None
     try:
         entries = resp.json()
     except ValueError:
-        return fallback_email
-    for entry in entries:
-        if entry.get("primary"):
-            return entry.get("email")
-    return fallback_email
+        return None
+    verified = [e for e in entries if e.get("verified") and e.get("email")]
+    chosen = next((e for e in verified if e.get("primary")), None) or (
+        verified[0] if verified else None
+    )
+    return chosen.get("email") if chosen else None
 
 
-def _find_or_create_github_user(github_id: str, email: str) -> User:
+def _find_or_create_github_user(github_id: str, email: str):
+    """Return the matched/created User, or _PASSWORD_ACCOUNT_CONFLICT.
+
+    Never links a GitHub identity to an account that has a password set: the
+    email would be the only proof, and emails can be reused by an attacker.
+    """
     user = User.query.filter_by(github_id=github_id).first()
     if user:
         return user
     user = User.query.filter_by(email=email).first()
     if user:
+        if user.password_hash:
+            return _PASSWORD_ACCOUNT_CONFLICT
         user.github_id = github_id
         db.session.commit()
         return user
@@ -329,11 +361,19 @@ def github_callback():  # noqa: PLR0911
         return jsonify({"ok": False, "error": "GitHub service unavailable."}), 503
 
     github_id = str(github_user.get("id"))
-    primary_email = _fetch_primary_email(access_token, github_user.get("email"))
+    primary_email = _fetch_primary_email(access_token)
     if not primary_email:
-        return jsonify({"ok": False, "error": "GitHub account must have an email."}), 400
+        return jsonify({"ok": False, "error": "GitHub account must have a verified email."}), 400
 
     user = _find_or_create_github_user(github_id, primary_email.strip().lower())
+    if user is _PASSWORD_ACCOUNT_CONFLICT:
+        return jsonify({
+            "ok": False,
+            "error": (
+                "An account with that email already exists. "
+                "Sign in with your password instead."
+            ),
+        }), 403
     if not user.is_active:
         return jsonify({"ok": False, "error": "Account is disabled."}), 403
 

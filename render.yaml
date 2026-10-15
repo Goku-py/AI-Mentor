@@ -10,10 +10,6 @@ services:
     envVars:
       - key: FLASK_ENV
         value: production
-      # Render has no Docker daemon: native host executor is mandatory.
-      # See analyzer core run_in_sandbox -> _run_host_sandboxed fallback.
-      - key: HOST_EXECUTION_ENABLED
-        value: 1
       # Trust Render router for X-Forwarded-* (correct IP/scheme/host
       # behind Vercel /api proxy -> Render). Do not increase blindly.
       - key: TRUSTED_PROXY_COUNT

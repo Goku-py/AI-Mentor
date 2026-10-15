@@ -17,7 +17,12 @@ class AuditLog(db.Model):
     __tablename__ = "audit_logs"
 
     id = db.Column(db.Integer, primary_key=True)
-    user_id = db.Column(db.Integer, db.ForeignKey("users.id"), nullable=True, index=True)
+    user_id = db.Column(
+        db.Integer,
+        db.ForeignKey("users.id", ondelete="CASCADE"),
+        nullable=True,
+        index=True,
+    )
     language = db.Column(db.String(20), nullable=False)
     had_error = db.Column(db.Boolean, nullable=False, default=False)
     code_snippet = db.Column(db.String(200), nullable=True)
@@ -28,9 +33,8 @@ class AuditLog(db.Model):
         index=True,
     )
 
-    # Observability & Cost
-    prompt_tokens = db.Column(db.Integer, default=0, nullable=False)
-    completion_tokens = db.Column(db.Integer, default=0, nullable=False)
+    # Observability & Cost. prompt_tokens/completion_tokens were dropped in
+    # migration c3d9e7a15b64 — no code path ever wrote them.
     total_tokens = db.Column(db.Integer, default=0, nullable=False)
     ip_address = db.Column(db.String(45), nullable=True)
 

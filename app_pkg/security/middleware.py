@@ -6,13 +6,12 @@ Registered into the app by create_app() via init_security(app).
 
 from __future__ import annotations
 
-import os
 import re
 import secrets
 import threading
 import unicodedata
 
-from flask import jsonify, request
+from flask import current_app, jsonify, request
 
 # ---------------------------------------------------------------------------
 # Bot / scraper UA blocking
@@ -93,7 +92,7 @@ def contains_abuse_pattern(code: str) -> str | None:
 # ---------------------------------------------------------------------------
 def _has_valid_api_key() -> bool:
     """Check if request carries a valid ANALYZE_API_KEY via X-API-Key header."""
-    required_key = (os.environ.get("ANALYZE_API_KEY") or "").strip()
+    required_key = (current_app.config.get("ANALYZE_API_KEY") or "").strip()
     if not required_key:
         return False
     provided_key = (request.headers.get("X-API-Key") or "").strip()
