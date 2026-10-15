@@ -1,9 +1,12 @@
 import { defineConfig, devices } from "@playwright/test";
+import { existsSync } from "node:fs";
 
-// Hardcoding the Windows venv path breaks the CI runner (bash strips the
-// backslashes). Resolve per platform.
-const pythonBin =
-  process.platform === "win32" ? ".venv\\Scripts\\python.exe" : ".venv/bin/python";
+const pythonCandidates =
+  process.platform === "win32"
+    ? [".venv\\Scripts\\python.exe", "python", "python3"]
+    : [".venv/bin/python", "python3", "python"];
+
+const pythonBin = pythonCandidates.find((bin) => existsSync(bin)) ?? pythonCandidates[0];
 
 export default defineConfig({
   testDir: "./e2e",
