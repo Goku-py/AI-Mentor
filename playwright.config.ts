@@ -1,5 +1,10 @@
 import { defineConfig, devices } from "@playwright/test";
 
+// Hardcoding the Windows venv path breaks the CI runner (bash strips the
+// backslashes). Resolve per platform.
+const pythonBin =
+  process.platform === "win32" ? ".venv\\Scripts\\python.exe" : ".venv/bin/python";
+
 export default defineConfig({
   testDir: "./e2e",
   timeout: 60_000,
@@ -9,7 +14,7 @@ export default defineConfig({
   },
   webServer: [
     {
-      command: "python app.py",
+      command: `${pythonBin} app.py`,
       port: 5000,
       timeout: 120_000,
       reuseExistingServer: !process.env.CI,
