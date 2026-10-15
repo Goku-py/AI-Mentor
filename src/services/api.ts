@@ -17,7 +17,7 @@ export async function authFetch(
   body: AuthForm,
   csrfToken: string,
 ): Promise<{ ok: boolean; status: number; data: Record<string, unknown> }> {
-  return fetch(`${API_BASE}${path}`, {
+  const r = await fetch(`${API_BASE}${path}`, {
     method: "POST",
     credentials: "include",
     headers: {
@@ -25,7 +25,16 @@ export async function authFetch(
       ...(csrfToken ? { "X-CSRFToken": csrfToken } : {}),
     },
     body: JSON.stringify(body),
-  }).then((r) => r.json().then((d) => ({ ok: r.ok, status: r.status, data: d })));
+  });
+  // A gateway 502 returns an HTML error page; let callers surface a real
+  // message instead of dying on an unhandled SyntaxError.
+  let data: Record<string, unknown> = {};
+  try {
+    data = (await r.json()) as Record<string, unknown>;
+  } catch {
+    data = { error: `Server returned a non-JSON response (HTTP ${r.status}).` };
+  }
+  return { ok: r.ok, status: r.status, data };
 }
 
 function getCookie(name: string): string | null {
@@ -94,9 +103,10 @@ export async function analyzeCode(
   code: string,
   language: string,
   accessToken: string | null,
-  csrfToken: string,
   signal?: AbortSignal,
 ): Promise<Response> {
+  // ponytail: /analyze is @csrf.exempt server-side and sets no access-token
+  // cookie, so no CSRF header is sent. Auth endpoints still require one.
   return fetch(`${API_BASE}/api/v1/analyze`, {
     method: "POST",
     signal,
@@ -104,7 +114,6 @@ export async function analyzeCode(
     headers: {
       "Content-Type": "application/json",
       ...(accessToken ? { Authorization: `Bearer ${accessToken}` } : {}),
-      ...(csrfToken ? { "X-CSRFToken": csrfToken } : {}),
     },
     body: JSON.stringify({ code, language }),
   });

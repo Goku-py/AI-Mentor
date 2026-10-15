@@ -1,10 +1,13 @@
-import { PlayIcon, SunIcon, MoonIcon, LanguageIcon, UploadIcon, TrashIcon, FullscreenIcon, ShareIcon, CodeIcon } from "../Icons";
+import { memo } from "react";
+import { PlayIcon, SunIcon, MoonIcon, LanguageIcon, UploadIcon, TrashIcon, FullscreenIcon, CodeIcon } from "../Icons";
 import LanguageSelector from "../Editor/LanguageSelector";
 import UserBadge from "../Auth/UserBadge";
 import type { User } from "../../types";
 
 interface ToolbarProps {
-  code: string;
+  // Derived boolean, not the code string: passing the whole document would
+  // invalidate React.memo on every keystroke.
+  canRun: boolean;
   language: string;
   fontSize: number;
   darkMode: boolean;
@@ -18,15 +21,14 @@ interface ToolbarProps {
   onDecreaseFont: () => void;
   onToggleDarkMode: () => void;
   onToggleFullscreen: () => void;
-  onShare: () => void;
   onClearOutput: () => void;
   onFileUploadClick: () => void;
   onLoginClick: () => void;
   onLogout: () => void;
 }
 
-export default function Toolbar({
-  code,
+function Toolbar({
+  canRun,
   language,
   darkMode,
   isFullscreen,
@@ -39,7 +41,6 @@ export default function Toolbar({
   onDecreaseFont,
   onToggleDarkMode,
   onToggleFullscreen,
-  onShare,
   onClearOutput,
   onFileUploadClick,
   onLoginClick,
@@ -60,20 +61,18 @@ export default function Toolbar({
           title="Upload code file"
           aria-label="Upload code file"
           onClick={onFileUploadClick}
-          onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); onFileUploadClick(); } }}
         ><UploadIcon /></button>
         <LanguageSelector language={language} onLanguageChange={onLanguageChange} />
         <button
           className="run-btn"
           onClick={onRun}
-          disabled={isAnalyzing || !code.trim()}
+          disabled={isAnalyzing || !canRun}
         >
           <PlayIcon />
           {isAnalyzing ? "Running..." : "Run"}
         </button>
         <button title="Clear output" onClick={onClearOutput} aria-label="Clear output"><TrashIcon /></button>
         <button title={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"} onClick={onToggleFullscreen} aria-label={isFullscreen ? "Exit fullscreen" : "Enter fullscreen"}><FullscreenIcon exit={isFullscreen} /></button>
-        <button title="Share" onClick={onShare} aria-label="Share code"><ShareIcon /></button>
         {user ? (
           <UserBadge user={user} onLogout={onLogout} />
         ) : (
@@ -83,3 +82,5 @@ export default function Toolbar({
     </header>
   );
 }
+
+export default memo(Toolbar);

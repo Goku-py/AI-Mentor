@@ -1,16 +1,23 @@
 [run]
+# pytest.ini used to pass `--cov=.`, which measured the whole repo (venv/,
+# node_modules/, dist/). It now names the three source packages explicitly;
+# this list keeps the same scoping for any ad-hoc `coverage run` invocation.
+source =
+    app_pkg
+    analyzer
+    models_pkg
 omit =
     venv/*
     tests/*
-    setup.py
+    migrations/*
     setup.ps1
     setup.sh
-    */migrations/*
 
 [report]
-# Show lines that have no test coverage
+# Measured total is 68% (rising as the suite grows). Floor sits well below it
+# so the gate catches regressions without failing CI on day one.
+fail_under = 58
 show_missing = True
-# Don't include 100%-covered files to keep the report focused
 skip_covered = False
 
 [html]

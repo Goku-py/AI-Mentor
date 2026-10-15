@@ -44,6 +44,9 @@ export default [
     },
   },
   {
-    ignores: ["dist/", "node_modules/", "*.js", "*.mjs", "src/**/*.d.ts"],
+    // Root-level JS is build/tooling config (this file, vite/eslint configs),
+    // not shipped app source. Scope to the root only — a bare "*.js" pattern
+    // also matches at ANY depth and silently unlinted everything under src/.
+    ignores: ["dist/", "node_modules/", "/*.js", "/*.mjs", "src/**/*.d.ts"],
   },
 ];

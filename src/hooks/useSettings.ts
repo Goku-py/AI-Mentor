@@ -1,5 +1,24 @@
 import { useState, useEffect, useCallback } from "react";
 
+// Safari private mode throws SecurityError on every localStorage access, and a
+// throw during a useState initialiser escapes the ErrorBoundary (it is below
+// it in the tree) — the page would just go blank. Every access is guarded.
+function readStorage(key: string): string | null {
+  try {
+    return localStorage.getItem(key);
+  } catch {
+    return null;
+  }
+}
+
+function writeStorage(key: string, value: string): void {
+  try {
+    localStorage.setItem(key, value);
+  } catch {
+    /* storage unavailable or full — settings just do not persist */
+  }
+}
+
 export interface UseSettingsReturn {
   fontSize: number;
   darkMode: boolean;
@@ -12,19 +31,21 @@ export interface UseSettingsReturn {
 
 export function useSettings(): UseSettingsReturn {
   const [fontSize, setFontSize] = useState<number>(() => {
-    const saved = parseInt(localStorage.getItem("fontSize") || "15", 10);
+    const saved = parseInt(readStorage("fontSize") || "15", 10);
     return isNaN(saved) ? 15 : saved;
   });
-  const [darkMode, setDarkMode] = useState<boolean>(() => localStorage.getItem("darkMode") === "true");
+  // Defaults to dark because :root and <meta name="theme-color"> are dark;
+  // defaulting to light flashed dark->light on every first visit.
+  const [darkMode, setDarkMode] = useState<boolean>(() => readStorage("darkMode") !== "false");
   const [isFullscreen, setIsFullscreen] = useState(false);
 
   useEffect(() => {
-    localStorage.setItem("fontSize", String(fontSize));
+    writeStorage("fontSize", String(fontSize));
   }, [fontSize]);
 
   useEffect(() => {
     document.documentElement.classList.toggle("light-mode", !darkMode);
-    localStorage.setItem("darkMode", String(darkMode));
+    writeStorage("darkMode", String(darkMode));
   }, [darkMode]);
 
   useEffect(() => {

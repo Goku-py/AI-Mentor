@@ -11,6 +11,12 @@ Covers:
 The 'client' fixture is provided by tests/conftest.py.
 """
 
+import pytest
+from flask_jwt_extended import decode_token
+
+from app_pkg import create_app
+from app_pkg.config import BaseConfig
+
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -206,41 +212,130 @@ class TestDebugEndpointSecurity:
 
 
 # ---------------------------------------------------------------------------
-# Host execution fallback (controlled by HOST_EXECUTION_ENABLED env var)
+# Host execution fallback (HOST_EXECUTION_ENABLED env var)
 # ---------------------------------------------------------------------------
 class TestHostExecution:
-    """Host execution is enabled solely by HOST_EXECUTION_ENABLED=1."""
+    """Production must refuse native host execution.
 
-    def test_host_execution_enabled_by_flag(self, monkeypatch):
-        """HOST_EXECUTION_ENABLED=1 enables host execution."""
-        monkeypatch.setenv("HOST_EXECUTION_ENABLED", "1")
+    Running untrusted student code as a direct child of the Flask process has no
+    namespace/uid/network isolation, so production requires the Docker sandbox.
+    """
 
-        import importlib  # noqa: PLC0415
-
-        import analyzer  # noqa: PLC0415
-        importlib.reload(analyzer)
-
-        assert analyzer._host_execution_allowed() is True  # noqa: SLF001
-
-    def test_host_execution_enabled_in_production_with_flag(self, monkeypatch):
-        """HOST_EXECUTION_ENABLED=1 enables host execution even in production."""
+    @staticmethod
+    def _prod_env(monkeypatch):
         monkeypatch.setenv("FLASK_ENV", "production")
+        monkeypatch.setenv("SECRET_KEY", "test-secret-32-chars-min-for-prod!!")
+        monkeypatch.setenv("JWT_SECRET_KEY", "test-jwt-secret-32-chars-min-for-pro")
+        monkeypatch.setenv("ALLOWED_ORIGINS", "http://localhost:5173")
+        monkeypatch.setenv("DATABASE_URL", "postgresql://user:pass@localhost:5432/test")
+
+    @staticmethod
+    def _validate(monkeypatch):
+        from flask import Flask  # noqa: PLC0415
+
+        from app_pkg.config import ProductionConfig  # noqa: PLC0415
+
+        with Flask(__name__).app_context():
+            ProductionConfig.validate()
+
+    def test_production_config_never_allows_host_execution(self):
+        """ProductionConfig hard-disables the flag regardless of the env var."""
+        from app_pkg.config import ProductionConfig  # noqa: PLC0415
+
+        assert ProductionConfig.ALLOW_HOST_EXECUTION is False
+
+    def test_production_validate_rejects_host_execution_flag(self, monkeypatch):
+        """HOST_EXECUTION_ENABLED=1 must fail production validation."""
+        self._prod_env(monkeypatch)
         monkeypatch.setenv("HOST_EXECUTION_ENABLED", "1")
 
-        import importlib  # noqa: PLC0415
+        with pytest.raises(RuntimeError, match="HOST_EXECUTION_ENABLED"):
+            self._validate(monkeypatch)
 
-        import analyzer  # noqa: PLC0415
-        importlib.reload(analyzer)
-
-        assert analyzer._host_execution_allowed() is True  # noqa: SLF001
-
-    def test_host_execution_disabled_without_flag(self, monkeypatch):
-        """Without HOST_EXECUTION_ENABLED=1, host execution must be disabled."""
+    def test_production_validate_passes_without_host_execution_flag(self, monkeypatch):
+        """Without the flag, validation raises nothing — the check is not vacuous."""
+        self._prod_env(monkeypatch)
         monkeypatch.delenv("HOST_EXECUTION_ENABLED", raising=False)
 
-        import importlib  # noqa: PLC0415
+        self._validate(monkeypatch)
 
-        import analyzer  # noqa: PLC0415
-        importlib.reload(analyzer)
+    def test_production_app_refuses_to_boot_with_host_execution(self, monkeypatch):
+        """create_app('production') must abort rather than start an unsafe app."""
+        self._prod_env(monkeypatch)
+        monkeypatch.setenv("HOST_EXECUTION_ENABLED", "1")
 
-        assert analyzer._host_execution_allowed() is False  # noqa: SLF001
+        from app_pkg import create_app  # noqa: PLC0415
+
+        with pytest.raises(RuntimeError, match="HOST_EXECUTION_ENABLED"):
+            create_app("production")
+
+    def test_runtime_gate_refuses_host_execution_under_production_config(
+        self, client, monkeypatch
+    ):
+        """Second enforcement layer: the runtime gate reads app.config, not env.
+
+        Proves _host_execution_allowed() stays False under ProductionConfig
+        even if the env var is set behind validate()'s back (e.g. a config
+        override, a test harness, or a future caller mutating app.config).
+        """
+        import analyzer.core as core  # noqa: PLC0415
+
+        monkeypatch.setenv("HOST_EXECUTION_ENABLED", "1")
+        client.application.config["ALLOW_HOST_EXECUTION"] = False
+
+        with client.application.app_context():
+            assert core._host_execution_allowed() is False  # noqa: SLF001
+
+    def test_runtime_gate_follows_config_outside_production(self, client):
+        """Control: the gate is config-driven, not hardcoded False."""
+        import analyzer.core as core  # noqa: PLC0415
+
+        client.application.config["ALLOW_HOST_EXECUTION"] = True
+
+        with client.application.app_context():
+            assert core._host_execution_allowed() is True  # noqa: SLF001
+
+
+# ---------------------------------------------------------------------------
+# JWT hardening
+# ---------------------------------------------------------------------------
+class TestJwtHardening:
+    """Access tokens must carry no PII, and must not be readable from cookies."""
+
+    def test_access_token_contains_no_pii_claims(self, client):
+        """email/role live in the database, not in the bearer token."""
+        client.post(
+            "/api/v1/auth/register",
+            json={"email": "pii_test@example.local", "password": "ValidPass1!"},
+        )
+        r = client.post(
+            "/api/v1/auth/login",
+            json={"email": "pii_test@example.local", "password": "ValidPass1!"},
+        )
+        claims = decode_token(r.get_json()["access_token"])
+        assert "email" not in claims
+        assert "role" not in claims
+
+    def test_refresh_token_contains_no_pii_claims(self, client):
+        client.post(
+            "/api/v1/auth/register",
+            json={"email": "pii_refresh@example.local", "password": "ValidPass1!"},
+        )
+        r = client.post(
+            "/api/v1/auth/login",
+            json={"email": "pii_refresh@example.local", "password": "ValidPass1!"},
+        )
+        cookie = r.headers.get("Set-Cookie", "")
+        raw = cookie.split("refresh_token_cookie=")[1].split(";")[0]
+        claims = decode_token(raw)
+        assert "email" not in claims
+        assert "role" not in claims
+
+    def test_token_location_is_headers_only(self):
+        """A cookie must not be able to ambiently authenticate a request."""
+        assert BaseConfig.JWT_TOKEN_LOCATION == ["headers"]
+
+    def test_testing_config_disables_jwt_blacklist(self):
+        """TestingConfig's blacklist flag must survive _init_extensions()."""
+        app = create_app("testing")
+        assert app.config["JWT_BLACKLIST_ENABLED"] is False

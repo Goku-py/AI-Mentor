@@ -122,16 +122,14 @@ def _increment_ai_quota() -> None:
 _AI_MENTOR_CACHE: OrderedDict = OrderedDict()
 _AI_MENTOR_CACHE_SIZE = 500
 
-_logger = logging.getLogger("app_pkg")
-
 MAX_AI_CODE_CHARS = 10000
 
 _MENTOR_PROMPTS = (
-    "You are a strict coding instructor helping a {difficulty} student."
+    "You are a strict coding instructor helping a student."
     " A student submitted code that has errors.\n"
     "RULES YOU MUST FOLLOW:\n"
     "- For EVERY issue you mention, you MUST reference the exact line number.\n"
-    "- Use language appropriate for a {difficulty} student.\n"
+    "- Infer the student's level from their code and pitch the explanation to match.\n"
     "- Explain what is wrong in simple terms.\n"
     "- Give a HINT toward the exact line or concept that needs fixing.\n"
     "- Do NOT give the corrected code.\n"
@@ -144,9 +142,7 @@ _MENTOR_PROMPTS = (
     "```\n{numbered_lines}\n```"
 )
 
-def _build_mentor_prompt(
-    code: str, language: str, error_context: str, difficulty: str = "beginner"
-) -> str:
+def _build_mentor_prompt(code: str, language: str, error_context: str) -> str:
     safe = code[:MAX_AI_CODE_CHARS]
     if len(code) > MAX_AI_CODE_CHARS:
         safe += "\n... [TRUNCATED DUE TO LENGTH BUDGET]"
@@ -155,7 +151,6 @@ def _build_mentor_prompt(
         error_context=error_context,
         numbered_lines=numbered,
         language=language,
-        difficulty=difficulty,
     )
 
 _STYLE_ISSUE_CODES: set[str] = {
@@ -194,12 +189,22 @@ def _build_error_context(execution: dict, issues: list[dict]) -> tuple[str, list
                 ctx += f"Line {warn.get('line')}: {warn.get('message')}\n"
     return ctx, all_errors
 
+def _ai_cache_key(code: str, language: str, error_context: str) -> str:
+    """Cache key for an explanation.
+
+    Keyed on the code, language and error context. There is no difficulty
+    level to partition on: the model infers the student's level itself, so
+    the same (code, language, errors) always yields the same explanation.
+    """
+    key_str = f"{code[:MAX_AI_CODE_CHARS]}:{language}:{error_context}"
+    return hashlib.sha256(key_str.encode("utf-8")).hexdigest()
+
+
 async def _get_ai_mentorship(
     code: str,
     language: str,
     execution: dict,
     issues: list[dict],
-    difficulty: str = "beginner",
 ) -> str:
     if _check_ai_quota():
         return "AI_MENTOR_QUOTA_EXCEEDED"
@@ -209,13 +214,12 @@ async def _get_ai_mentorship(
     try:
         error_context, all_errors = _build_error_context(execution, issues)
         if all_errors or error_context:
-            cache_key_str = f"{code[:MAX_AI_CODE_CHARS]}:{language}:{error_context}"
-            cache_key = hashlib.sha256(cache_key_str.encode("utf-8")).hexdigest()
+            cache_key = _ai_cache_key(code, language, error_context)
             if cache_key in _AI_MENTOR_CACHE:
                 res = _AI_MENTOR_CACHE.pop(cache_key)
                 _AI_MENTOR_CACHE[cache_key] = res
                 return res
-            prompt = _build_mentor_prompt(code, language, error_context, difficulty)
+            prompt = _build_mentor_prompt(code, language, error_context)
             gemini_model = (os.environ.get("GEMINI_MODEL") or "gemini-2.5-flash").strip()
             endpoint = (
                 "https://generativelanguage.googleapis.com/v1beta/"
@@ -226,9 +230,13 @@ async def _get_ai_mentorship(
             }
             _increment_ai_quota()
             _max_retries = 3
-            deadline = asyncio.get_event_loop().time() + 30
+            deadline = asyncio.get_running_loop().time() + 30
+            status_code = 0
+            raw_body = ""
             async with httpx.AsyncClient(timeout=httpx.Timeout(30.0, connect=10.0)) as client:
                 for _attempt in range(_max_retries):
+                    if asyncio.get_running_loop().time() > deadline:
+                        break
                     try:
                         response = await client.post(
                             endpoint, json=payload, headers={"X-Goog-Api-Key": api_key},
@@ -236,23 +244,27 @@ async def _get_ai_mentorship(
                         status_code = response.status_code
                         raw_body = response.text
                         if status_code == 429 and _attempt < _max_retries - 1:
-                            if asyncio.get_event_loop().time() > deadline:
-                                break
                             backoff = 2**_attempt
+                            if asyncio.get_running_loop().time() + backoff > deadline:
+                                _logger.warning(
+                                    "Gemini rate limited (429); no retry budget left. "
+                                    "aborting retries.",
+                                )
+                                break
                             _logger.warning(
-                        "Gemini rate limited (429). Retrying in %ds...", backoff
-                    )
+                                "Gemini rate limited (429). Retrying in %ds...", backoff,
+                            )
                             await asyncio.sleep(backoff)
                             continue
                         break
                     except httpx.RequestError:
+                        backoff = 2**_attempt
                         if (
-                            asyncio.get_event_loop().time() > deadline
-                            or _attempt >= _max_retries - 1
+                            _attempt >= _max_retries - 1
+                            or asyncio.get_running_loop().time() + backoff > deadline
                         ):
                             _logger.exception("Gemini network error")
                             return "AI_MENTOR_API_ERROR"
-                        backoff = 2**_attempt
                         _logger.warning("Gemini network error. Retrying in %ds...", backoff)
                         await asyncio.sleep(backoff)
             if status_code < 200 or status_code >= 300:

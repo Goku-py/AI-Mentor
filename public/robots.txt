@@ -1,0 +1,5 @@
+# robots.txt for AI Code Mentor
+User-agent: *
+Allow: /
+
+Sitemap: https://ai-mentor-tech.vercel.app/sitemap.xml

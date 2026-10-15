@@ -30,7 +30,7 @@ export default class ErrorBoundary extends Component<Props, State> {
           <div className="not-found-code" aria-hidden="true">!</div>
           <h1 className="not-found-title">Something went wrong</h1>
           <p className="not-found-desc">
-            An unexpected error occurred. Your work is saved locally. Try reloading or resetting the editor.
+            An unexpected error occurred. Your editor contents were not saved — copy anything you still need before reloading.
           </p>
           <pre
             style={{

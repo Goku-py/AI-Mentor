@@ -86,3 +86,12 @@ AUDIT_REPORT_*.md
 
 # Deepwork session state (persistent between prompts, never committed)
 .slim/deepwork/
+
+# Nested clone of this repo that lives inside the working tree (own .git,
+# own branches). Never a submodule — keep it out of the index.
+/AI Mentor/
+
+# Local agent/MCP state directories (tool caches + scratch output)
+.codedev-mcp/
+.headroom/
+.playwright-mcp/

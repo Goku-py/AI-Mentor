@@ -1,0 +1,24 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1200" height="630" viewBox="0 0 1200 630" role="img" aria-label="AI Code Mentor">
+  <rect width="1200" height="630" fill="#0d1117"/>
+  <rect x="48" y="48" width="1104" height="534" rx="16" fill="#161b22" stroke="#30363d"/>
+  <!-- header bar -->
+  <rect x="48" y="48" width="1104" height="56" rx="16" fill="#010409"/>
+  <rect x="48" y="88" width="1104" height="16" fill="#010409"/>
+  <circle cx="84" cy="76" r="7" fill="#ff7b72"/>
+  <circle cx="106" cy="76" r="7" fill="#e3b341"/>
+  <circle cx="128" cy="76" r="7" fill="#7ee787"/>
+  <text x="168" y="81" font-family="Inter, sans-serif" font-size="18" font-weight="600" fill="#c9d1d9">AI Code Mentor</text>
+  <!-- code mock -->
+  <text x="84" y="150" font-family="Fira Code, monospace" font-size="15" fill="#8b949e">› Python  •  JavaScript  •  Java  •  C  •  C++</text>
+  <text x="84" y="195" font-family="Fira Code, monospace" font-size="20" fill="#79c0ff">def</text>
+  <text x="135" y="195" font-family="Fira Code, monospace" font-size="20" fill="#d2a8ff"> fibonacci</text>
+  <text x="260" y="195" font-family="Fira Code, monospace" font-size="20" fill="#c9d1d9">(n):</text>
+  <text x="84" y="225" font-family="Fira Code, monospace" font-size="17" fill="#7ee787">    """AI reviews your code instantly."""</text>
+  <text x="84" y="295" font-family="Inter, sans-serif" font-size="42" font-weight="700" fill="#c9d1d9">Run, Debug &amp; Learn</text>
+  <text x="84" y="335" font-family="Inter, sans-serif" font-size="42" font-weight="700" fill="#2f81f7">with AI.</text>
+  <text x="84" y="375" font-family="Inter, sans-serif" font-size="18" fill="#8b949e">In-browser runner  •  instant execution  •  mentor feedback</text>
+  <!-- CTA -->
+  <rect x="84" y="415" width="170" height="44" rx="8" fill="#238636"/>
+  <text x="169" y="443" text-anchor="middle" font-family="Inter, sans-serif" font-size="16" font-weight="700" fill="#ffffff">▶  Run code</text>
+  <text x="280" y="443" font-family="Inter, sans-serif" font-size="14" fill="#8b949e">  No setup — start in seconds</text>
+</svg>

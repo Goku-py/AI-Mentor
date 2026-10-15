@@ -76,12 +76,19 @@ def _init_extensions(app):
     )
     app.config["JWT_BLACKLIST_STORAGE_URI"] = _blacklist_storage
     _blacklist_env = os.environ.get("JWT_BLACKLIST_ENABLED", "").strip().lower()
+    # Sole owner of this flag: BaseConfig no longer parses the env var.
     app.config["JWT_BLACKLIST_ENABLED"] = (
-        _blacklist_env in ("1", "true", "yes")
-        or _blacklist_storage.startswith("redis")
+        False
+        if app.config.get("TESTING")
+        else (
+            _blacklist_env in ("1", "true", "yes")
+            or _blacklist_storage.startswith("redis")
+        )
     )
     if _blacklist_storage.startswith("redis"):
-        get_redis_client()
+        # Must use the resolved URI, not the raw env var, or auto-detected
+        # REDIS_URL (db1) would silently degrade to the in-memory dict.
+        app.extensions["redis"] = get_redis_client(_blacklist_storage)
 
     csrf.init_app(app)
 
@@ -127,7 +134,7 @@ def _enforce_production_debug(app):
     if os.environ.get("FLASK_DEBUG", "").strip().lower() in {"1", "true"}:
         app.logger.warning(
             "FLASK_DEBUG env var is set but the app is in production mode. "
-            "Forcing DEBUG=False. Delete FLASK_DEBUG from Railway dashboard."
+            "Forcing DEBUG=False. Delete FLASK_DEBUG from the hosting dashboard."
         )
     app.debug = False
     app.env = "production"
@@ -200,10 +207,6 @@ def create_app(config=None) -> Flask:
         config_obj = config
     app.config.from_object(config_obj)
 
-    if hasattr(config_obj, "validate") and callable(config_obj.validate):
-        with app.app_context():
-            config_obj.validate()
-
     is_prod = _is_production_env() or isinstance(config_obj, ProductionConfig)
 
     if is_prod:
@@ -215,6 +218,12 @@ def create_app(config=None) -> Flask:
         _init_sentry()
 
     _init_extensions(app)
+
+    # After _init_extensions so validation inspects the resolved config/env the
+    # app actually runs with (Redis auto-detection, sandbox images, …).
+    if hasattr(config_obj, "validate") and callable(config_obj.validate):
+        with app.app_context():
+            config_obj.validate()
 
     _configure_cors(app)
     _configure_talisman(app, is_prod)
@@ -228,7 +237,9 @@ def create_app(config=None) -> Flask:
     if not is_prod:
         app.register_blueprint(debug_bp)
 
-    if app.config.get("ENV") == "development":
+    # Flask 3 removed config["ENV"]; resolve the env name the same way as
+    # _is_production_env() or this exemption silently never runs.
+    if not _is_production_env():
         _exempt_dev_csrf(app)
 
     register_cli(app)

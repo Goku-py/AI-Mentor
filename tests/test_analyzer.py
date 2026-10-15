@@ -4,23 +4,65 @@ Unit tests for the code analyzer module.
 Run with: python -m pytest tests/test_analyzer.py -v
 """
 
+import ast
+import json
 from unittest.mock import MagicMock
 
+import flask
 import pytest
 import requests.exceptions
 
 import analyzer
 from analyzer import (
+    _ai_cache_key,
+    _analyze_python,
     _check_syntax,
     _detect_language_mismatch,
     _line_based_checks,
+    _parse_gcc_output,
+    _parse_java_compile_output,
     _parse_python_traceback,
     _python_error_help,
+    _run_gcc,
+    _sandbox_image,
     analyze_code,
+    core,
     run_in_sandbox,
     sandbox_runtime_status,
     verify_tools,
 )
+
+VALID_JS = 'function main() {\n    console.log("hi");\n}\nmain();'
+VALID_JAVA = (
+    "public class Main {\n"
+    "    public static void main(String[] args) {\n"
+    '        System.out.println("hi");\n'
+    "    }\n"
+    "}"
+)
+VALID_C = '#include <stdio.h>\nint main(void) {\n    printf("hi\\n");\n    return 0;\n}'
+PINNED_PYTHON_IMAGE = "python:3.11-slim@sha256:" + "a" * 64
+VALID_CPP = '#include <iostream>\nint main() { std::cout << "hello"; return 0; }'
+RUNNER_SNIPPETS = {
+    "python": "print('hello')",
+    "javascript": VALID_JS,
+    "java": VALID_JAVA,
+    "c": VALID_C,
+    "cpp": VALID_CPP,
+}
+# language -> (expected sandbox image key, token that must appear in cmd)
+RUNNER_EXPECTED = {
+    "python": ("python", "python"),
+    "javascript": ("javascript", "node"),
+    "java": ("java", "javac"),
+    "c": ("gcc", "gcc"),
+    "cpp": ("gcc", "g++"),
+}
+
+# conftest's autouse mock_ai_mentorship replaces analyzer.mentorship._get_ai_mentorship
+# with a stub for the duration of every test, so grab the real coroutine at import
+# time (collection happens before fixtures are applied).
+_REAL_GET_AI_MENTORSHIP = analyzer.mentorship._get_ai_mentorship  # noqa: SLF001
 
 
 class TestToolVerification:
@@ -50,17 +92,57 @@ class TestToolVerification:
         assert "ok" in status
         assert "mode" in status
 
+    def test_sandbox_status_reports_remote_mode(self, monkeypatch):
+        """Runner URL configured -> mode is remote, ok pings the runner."""
+        monkeypatch.setenv("EXECUTION_RUNNER_URL", "http://runner:5001")
+        calls = {}
+
+        class _Resp:
+            def raise_for_status(self):
+                return None
+
+        def fake_get(url, timeout):
+            calls["url"] = url
+            calls["timeout"] = timeout
+            return _Resp()
+
+        monkeypatch.setattr(core.requests, "get", fake_get)
+        status = core.sandbox_runtime_status()
+        assert status["ok"] is True
+        assert status["mode"] == "remote"
+        assert calls["url"] == "http://runner:5001/healthz"
+
+    def test_sandbox_status_remote_unreachable(self, monkeypatch):
+        """A dead runner must report ok=False, not fall back to local Docker."""
+        monkeypatch.setenv("EXECUTION_RUNNER_URL", "http://runner:5001")
+
+        def boom(url, timeout):
+            raise OSError("connection refused")  # noqa: TRY003
+
+        monkeypatch.setattr(core.requests, "get", boom)
+        status = core.sandbox_runtime_status()
+        assert status["ok"] is False
+        assert status["mode"] == "remote"
+        assert "unreachable" in status["reason"]
+
+    def test_execution_is_remote_follows_env(self, monkeypatch):
+        monkeypatch.delenv("EXECUTION_RUNNER_URL", raising=False)
+        assert core.execution_is_remote() is False
+        monkeypatch.setenv("EXECUTION_RUNNER_URL", "  ")
+        assert core.execution_is_remote() is False
+        monkeypatch.setenv("EXECUTION_RUNNER_URL", "http://runner:5001")
+        assert core.execution_is_remote() is True
+
     def test_sandbox_unavailable_returns_safe_error(self, monkeypatch):
         """Missing Docker should fail closed with SandboxUnavailable."""
         monkeypatch.setattr(analyzer, "docker", None)
-        run_in_sandbox(
+        execution = run_in_sandbox(
             "print('x')",
             "python",
             "python:3.11-slim",
             ["python", "{source}"],
             timeout=2,
         )
-        execution = run_in_sandbox.last_result
         assert execution["error"] is not None
         assert execution["error"]["type"] == "SandboxUnavailable"
 
@@ -384,6 +466,287 @@ class TestSandboxDeadline:
         assert execution["returncode"] == -1
         assert execution["error"]["type"] == "Timeout"
         container_mock.kill.assert_called_once()
+
+
+class TestNonPythonSyntaxChecking:
+    """Regression guard: Python's parser must not judge other languages.
+
+    ast.parse() rejects valid JavaScript/Java/C source, which used to fabricate
+    a SYNTAX_ERROR issue for every non-Python submission.
+    """
+
+    def test_valid_javascript_reports_no_syntax_error(self):
+        issues, exc = _check_syntax(VALID_JS, "javascript")
+        assert issues == []
+        assert exc is None
+
+    def test_valid_java_reports_no_syntax_error(self):
+        issues, exc = _check_syntax(VALID_JAVA, "java")
+        assert issues == []
+        assert exc is None
+
+    def test_valid_c_reports_no_syntax_error(self):
+        issues, exc = _check_syntax(VALID_C, "c")
+        assert issues == []
+        assert exc is None
+
+    def test_js_alias_also_skips_python_parser(self):
+        issues, exc = _check_syntax(VALID_JS, "js")
+        assert issues == []
+        assert exc is None
+
+    def test_non_python_source_is_actually_rejected_by_python_parser(self):
+        """Sanity check that the samples above really do fail ast.parse()."""
+        with pytest.raises(SyntaxError):
+            ast.parse(VALID_JS)
+        with pytest.raises(SyntaxError):
+            ast.parse(VALID_JAVA)
+        with pytest.raises(SyntaxError):
+            ast.parse(VALID_C)
+
+    def test_python_syntax_error_still_suppresses_execution(self, monkeypatch):
+        """_analyze_python must still skip execution when Python fails to parse."""
+        executed = []
+
+        def _fake_run_python(code):
+            executed.append(code)
+
+        monkeypatch.setattr(analyzer.core, "_run_python", _fake_run_python)
+
+        issues, execution = _analyze_python("def broken(")
+
+        assert executed == []
+        assert [i.code for i in issues] == ["SYNTAX_ERROR"]
+        assert execution["returncode"] == 1
+        assert execution["error"]["type"] == "SyntaxError"
+
+
+class TestSandboxImagePinning:
+    """An unreachable/unconfigured image map must fail closed, never unpinned."""
+
+    def test_no_app_context_means_unavailable(self):
+        assert _sandbox_image("python") is None
+
+    def test_configured_image_is_returned(self):
+        app = flask.Flask(__name__)
+        app.config["SANDBOX_IMAGES"] = {"python": PINNED_PYTHON_IMAGE}
+        with app.app_context():
+            assert _sandbox_image("python") == PINNED_PYTHON_IMAGE
+
+    def test_unconfigured_language_means_unavailable(self):
+        app = flask.Flask(__name__)
+        app.config["SANDBOX_IMAGES"] = {"python": PINNED_PYTHON_IMAGE}
+        with app.app_context():
+            assert _sandbox_image("java") is None
+
+    def test_missing_config_key_means_unavailable(self):
+        app = flask.Flask(__name__)
+        with app.app_context():
+            assert _sandbox_image("python") is None
+
+    def test_never_returns_an_unpinned_tag(self):
+        app = flask.Flask(__name__)
+        app.config["SANDBOX_IMAGES"] = {"python": PINNED_PYTHON_IMAGE}
+        with app.app_context():
+            for language in ("python", "javascript", "gcc", "java"):
+                image = _sandbox_image(language)
+                assert image is None or "@sha256:" in image, language
+
+
+class TestUnavailableToolPaths:
+    """With no pinned image every language reports SandboxUnavailable."""
+
+    @pytest.fixture
+    def no_images(self):
+        app = flask.Flask(__name__)
+        app.config["SANDBOX_IMAGES"] = {}
+        with app.app_context():
+            yield
+
+    @pytest.mark.usefixtures("no_images")
+    def test_run_gcc_reports_unavailable(self):
+        issues, execution = _run_gcc(VALID_C, "c", "gcc", "main.c")
+        assert issues == []
+        assert execution["tool_missing"] is True
+        assert execution["returncode"] == -1
+        assert execution["error"]["type"] == "SandboxUnavailable"
+
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("no_images")
+    async def test_javascript_reports_unavailable(self):
+        result = await analyze_code(VALID_JS, "javascript")
+        assert result["execution"]["tool_missing"] is True
+        assert result["execution"]["returncode"] == -1
+        assert result["execution"]["error"]["type"] == "SandboxUnavailable"
+
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("no_images")
+    async def test_java_reports_unavailable(self):
+        result = await analyze_code(VALID_JAVA, "java")
+        assert result["execution"]["error"]["type"] == "SandboxUnavailable"
+        assert not any(i["code"] == "SYNTAX_ERROR" for i in result["issues"])
+
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("no_images")
+    async def test_c_reports_unavailable(self):
+        result = await analyze_code(VALID_C, "c")
+        assert result["execution"]["error"]["type"] == "SandboxUnavailable"
+
+
+class TestRunnerDispatch:
+    """With a runner configured, every language must be POSTed to it verbatim."""
+
+    @pytest.fixture
+    def dispatched(self, monkeypatch):
+        monkeypatch.setenv("EXECUTION_RUNNER_URL", "http://runner:5001/")
+        monkeypatch.setenv("EXECUTION_RUNNER_SECRET", "s3cret")
+        app = flask.Flask(__name__)
+        app.config["SANDBOX_IMAGES"] = {
+            key: f"{key}:tag@sha256:{'a' * 64}" for key in ("python", "javascript", "gcc", "java")
+        }
+        calls = []
+
+        class _Resp:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"stdout": "hello", "stderr": "", "returncode": 0}
+
+        def fake_post(url, json=None, headers=None, timeout=None):
+            calls.append({"url": url, "json": json, "headers": headers, "timeout": timeout})
+            return _Resp()
+
+        monkeypatch.setattr(core.requests, "post", fake_post)
+        with app.app_context():
+            yield calls
+
+    @pytest.mark.parametrize("language", sorted(RUNNER_SNIPPETS))
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("dispatched")
+    async def test_language_reaches_runner(self, dispatched, language):
+        image_key, token = RUNNER_EXPECTED[language]
+        await analyze_code(RUNNER_SNIPPETS[language], language)
+
+        assert len(dispatched) == 1, language
+        call = dispatched[0]
+        assert call["url"] == "http://runner:5001/execute"
+        assert call["headers"]["Authorization"] == "Bearer s3cret"
+        assert call["json"]["image"].startswith(f"{image_key}:")
+        assert token in " ".join(call["json"]["cmd"])
+        assert call["json"]["language"] == language
+
+
+class TestCompilerOutputParsing:
+    """GCC and javac diagnostic parsing."""
+
+    def test_gcc_output_maps_lines_severity_and_codes(self):
+        issues = _parse_gcc_output(
+            "main.c:10:5: error: expected ';' before 'return'\n"
+            "main.c:12:1: warning: unused variable 'x'",
+            "c",
+        )
+        assert [(i.line, i.severity, i.code) for i in issues] == [
+            (10, "error", "C_ERROR"),
+            (12, "warning", "C_WARNING"),
+        ]
+        assert issues[0].message == "expected ';' before 'return'"
+
+    def test_gcc_output_honours_language_label(self):
+        issues = _parse_gcc_output("main.cpp:3:2: error: bad", "cpp")
+        assert [i.code for i in issues] == ["CPP_ERROR"]
+
+    def test_gcc_output_ignores_unstructured_lines(self):
+        assert _parse_gcc_output("", "c") == []
+        assert _parse_gcc_output("ld: cannot find -lm", "c") == []
+        # non-numeric line number must not be coerced into an issue
+        assert _parse_gcc_output("main.c:unknown: error: bad", "c") == []
+
+    def test_java_compile_output_maps_line_and_code(self):
+        issues = _parse_java_compile_output(
+            "Main.java:4: error: ';' expected\nMain.java:9: warning: deprecation",
+        )
+        assert [(i.line, i.severity, i.code) for i in issues] == [
+            (4, "error", "JAVA_ERROR"),
+            (9, "warning", "JAVA_WARNING"),
+        ]
+        assert issues[0].message == "';' expected"
+
+    def test_java_compile_output_ignores_unstructured_lines(self):
+        assert _parse_java_compile_output("") == []
+        assert _parse_java_compile_output("1 error") == []
+        assert _parse_java_compile_output("Note: uses unchecked or unsafe operations.") == []
+
+
+class TestAiMentorCache:
+    """Cache key is (code, language, error_context) — there is no difficulty level."""
+
+    def test_cache_key_is_stable_for_identical_input(self):
+        ctx = "Line 1: ZeroDivisionError"
+        assert _ai_cache_key("x = 1/0", "python", ctx) == _ai_cache_key(
+            "x = 1/0", "python", ctx,
+        )
+
+    def test_cache_key_separates_language_and_context(self):
+        code = "x = 1/0"
+        keys = {
+            _ai_cache_key(code, "python", "Line 1: A"),
+            _ai_cache_key(code, "java", "Line 1: A"),
+            _ai_cache_key(code, "python", "Line 1: B"),
+        }
+        assert len(keys) == 3
+
+    @pytest.mark.asyncio
+    async def test_identical_request_is_served_from_cache(self, monkeypatch):
+        """End-to-end: a repeat of the same code+language+context makes no second API call."""
+        mentorship = analyzer.mentorship
+        monkeypatch.setattr(mentorship, "_check_ai_quota", lambda: False)
+        monkeypatch.setattr(mentorship, "_get_valid_gemini_api_key", lambda: "test-key")
+        monkeypatch.setattr(mentorship, "_increment_ai_quota", lambda: None)
+
+        calls: list[int] = []
+
+        class _FakeResponse:
+            def __init__(self):
+                self.status_code = 200
+                self.text = json.dumps(
+                    {"candidates": [{"content": {"parts": [{"text": f"hint-{len(calls)}"}]}}]},
+                )
+
+        class _FakeClient:
+            async def __aenter__(self):
+                return self
+
+            async def __aexit__(self, *_exc):
+                return False
+
+            async def post(self, *_args, **_kwargs):
+                calls.append(1)
+                return _FakeResponse()
+
+        monkeypatch.setattr(mentorship.httpx, "AsyncClient", lambda *a, **k: _FakeClient())
+
+        code = "x = 1/0"
+        execution = {
+            "error": {"type": "ZeroDivisionError", "message": "division by zero", "line": 1},
+        }
+        issues = [{"line": 1, "severity": "error", "code": "ZERO_DIV", "message": "boom"}]
+
+        cache = mentorship._AI_MENTOR_CACHE  # noqa: SLF001
+        cache.clear()
+        try:
+            first = await _REAL_GET_AI_MENTORSHIP(code, "python", execution, issues)
+            assert first == "hint-1"
+
+            cached = await _REAL_GET_AI_MENTORSHIP(code, "python", execution, issues)
+            assert cached == "hint-1"
+            assert len(calls) == 1, "same code+language+context should hit the cache"
+
+            fresh = await _REAL_GET_AI_MENTORSHIP(code, "java", execution, issues)
+            assert len(calls) == 2, "a different language must not reuse the cache entry"
+            assert fresh == "hint-2"
+        finally:
+            cache.clear()
 
 
 if __name__ == "__main__":

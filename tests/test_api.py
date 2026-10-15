@@ -8,6 +8,8 @@ import json
 
 import pytest
 
+from app_pkg.blueprints.api import routes as api_routes
+
 # client and auth_headers fixtures are provided by tests/conftest.py
 
 
@@ -175,23 +177,62 @@ class TestAnalyzeEndpoint:
         )
         assert response.status_code == 400
 
-    def test_analyze_requires_api_key_when_configured(self, client, monkeypatch):
-        """Analyze endpoint should require X-API-Key when ANALYZE_API_KEY is set."""
-        monkeypatch.setenv("ANALYZE_API_KEY", "test-api-key")
-        no_auth = client.post(
+    def test_analyze_allows_anonymous_callers(self, client):
+        """The X-API-Key gate was dropped: signed-out browser users can analyze."""
+        client.application.config["ANALYZE_API_KEY"] = "test-api-key"
+        response = client.post(
             "/api/v1/analyze",
             data=json.dumps({"code": 'print("hello")', "language": "python"}),
             content_type="application/json",
         )
-        assert no_auth.status_code == 401
+        assert response.status_code == 200
 
-        with_auth = client.post(
+    def test_analyze_ignores_wrong_api_key_when_anonymous(self, client):
+        """A stale/incorrect X-API-Key must not lock an anonymous caller out."""
+        client.application.config["ANALYZE_API_KEY"] = "test-api-key"
+        response = client.post(
             "/api/v1/analyze",
             data=json.dumps({"code": 'print("hello")', "language": "python"}),
             content_type="application/json",
-            headers={"X-API-Key": "test-api-key"},
+            headers={"X-API-Key": "wrong-key"},
         )
-        assert with_auth.status_code == 200
+        assert response.status_code == 200
+
+    def test_analyze_allows_authenticated_without_api_key(self, client, auth_headers, monkeypatch):
+        """A valid JWT satisfies /analyze auth without any X-API-Key."""
+        client.application.config["ANALYZE_API_KEY"] = "test-api-key"
+        response = client.post(
+            "/api/v1/analyze",
+            data=json.dumps({"code": 'print("hello")', "language": "python"}),
+            content_type="application/json",
+            headers=auth_headers,
+        )
+        assert response.status_code == 200
+
+    def test_analyze_allows_authenticated_with_wrong_api_key(
+        self, client, auth_headers, monkeypatch
+    ):
+        """Authenticated callers never need to know the server-side API key."""
+        client.application.config["ANALYZE_API_KEY"] = "test-api-key"
+        headers = {**auth_headers, "X-API-Key": "wrong-key"}
+        response = client.post(
+            "/api/v1/analyze",
+            data=json.dumps({"code": 'print("hello")', "language": "python"}),
+            content_type="application/json",
+            headers=headers,
+        )
+        assert response.status_code == 200
+
+    def test_analyze_rejects_invalid_jwt(self, client, monkeypatch):
+        """A malformed Authorization header is still rejected, not silently downgraded."""
+        client.application.config["ANALYZE_API_KEY"] = "test-api-key"
+        response = client.post(
+            "/api/v1/analyze",
+            data=json.dumps({"code": 'print("hello")', "language": "python"}),
+            content_type="application/json",
+            headers={"Authorization": "Bearer invalid-token"},
+        )
+        assert response.status_code in (401, 422)
 
     def test_analyze_blocks_abuse_pattern(self, client):
         """Analyze endpoint should block obviously dangerous payload patterns."""
@@ -204,6 +245,49 @@ class TestAnalyzeEndpoint:
         assert response.status_code == 400
         data = json.loads(response.data)
         assert "security policy" in data.get("error", "").lower()
+
+
+class TestLanguageAvailability:
+    """The API host has no toolchains when execution runs on the runner VM."""
+
+    @pytest.fixture(autouse=True)
+    def _restore_tools(self):
+        original = api_routes.AVAILABLE_TOOLS
+        yield
+        api_routes.AVAILABLE_TOOLS = original
+
+    @pytest.mark.parametrize("language", ["javascript", "java", "c", "cpp"])
+    def test_remote_runner_does_not_422_missing_tools(self, client, monkeypatch, language):
+        """On Render only python exists locally; the gate must not fire."""
+        monkeypatch.setenv("EXECUTION_RUNNER_URL", "http://runner:5001")
+        api_routes._refresh_tools()  # noqa: SLF001
+        assert api_routes.AVAILABLE_TOOLS[language] is True
+
+        response = client.post(
+            "/api/v1/analyze",
+            data=json.dumps({"code": "int x = 1;", "language": language}),
+            content_type="application/json",
+        )
+        assert response.status_code != 422
+
+    def test_local_mode_still_422_missing_tools(self, client, monkeypatch):
+        """Without a runner, a missing toolchain is still an explicit 422."""
+        monkeypatch.delenv("EXECUTION_RUNNER_URL", raising=False)
+        monkeypatch.setattr(
+            api_routes,
+            "verify_tools",
+            lambda: dict.fromkeys(["python", "javascript", "js", "java", "c", "cpp"], False),
+        )
+        api_routes._refresh_tools()  # noqa: SLF001
+        assert api_routes.AVAILABLE_TOOLS["java"] is False
+
+        response = client.post(
+            "/api/v1/analyze",
+            data=json.dumps({"code": "public class Main {}", "language": "java"}),
+            content_type="application/json",
+        )
+        assert response.status_code == 422
+        assert "not installed" in json.loads(response.data)["error"]
 
 
 class TestHistoryEndpoint:
@@ -301,22 +385,26 @@ class TestRootEndpoint:
     """Test root endpoint (serves the frontend SPA)."""
 
     def test_root_endpoint_exists(self, client):
-        """Root endpoint should return 200 (serves index.html or fallback)."""
+        """Root endpoint returns 200, serving the built frontend's index.html."""
         response = client.get("/")
-        # The app serves a built frontend; 200 or 404 (dist not built) are both
-        # acceptable in a test environment without a built frontend.
-        assert response.status_code in (200, 404)
+        assert response.status_code == 200
 
 
 class TestCORSHeaders:
     """Test CORS configuration."""
 
     def test_cors_headers_present(self, client):
-        """Response should include CORS headers."""
-        response = client.options("/api/v1/analyze")
-        # CORS headers should be set
-        # The actual check depends on flask-cors configuration
+        """Preflight response must echo the allowed origin and list the methods."""
+        response = client.options(
+            "/api/v1/analyze",
+            headers={
+                "Origin": "http://localhost:5173",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
         assert response.status_code == 200
+        assert response.headers.get("Access-Control-Allow-Origin") == "http://localhost:5173"
+        assert "POST" in response.headers.get("Access-Control-Allow-Methods", "")
 
 
 class TestDebugSecurityEndpoints:

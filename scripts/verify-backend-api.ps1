@@ -6,6 +6,16 @@ $Pass = "TestSprite1!"
 $results = @()
 $session = New-Object Microsoft.PowerShell.Commands.WebRequestSession
 
+# Every language the backend claims to execute, with a snippet that prints hello.
+$snippets = [ordered]@{
+    python     = "print('hello')"
+    javascript = "console.log('hello')"
+    java       = "public class Main { public static void main(String[] a) { System.out.println(`"hello`"); } }"
+    c          = "#include <stdio.h>`nint main(void) { printf(`"hello`"); return 0; }"
+    cpp        = "#include <iostream>`nint main() { std::cout << `"hello`"; return 0; }"
+}
+$languages = @($snippets.Keys)
+
 function Record($id, $title, $ok, $detail) {
     $script:results += [pscustomobject]@{ id = $id; title = $title; passed = $ok; detail = $detail }
 }
@@ -17,19 +27,23 @@ try {
 
 try {
     $t = Invoke-RestMethod "$Base/tools"
-    Record "TC102" "Tools endpoint" ($t.available.python -eq $true) "python=$($t.available.python)"
+    $missing = @($languages | Where-Object { $t.available.$_ -ne $true })
+    Record "TC102" "Tools endpoint" ($missing.Count -eq 0) "unavailable=$($missing -join ',')"
 } catch { Record "TC102" "Tools endpoint" $false $_.Exception.Message }
 
 $csrf = (Invoke-RestMethod "$Base/csrf-token" -WebSession $session).csrf_token
 $csrfHeaders = @{ "X-CSRFToken" = $csrf }
 
-try {
-    $a = Invoke-RestMethod -Method Post -Uri "$Base/analyze" -ContentType "application/json" `
-        -WebSession $session -Headers $csrfHeaders `
-        -Body (@{ code = "print('hello')"; language = "python" } | ConvertTo-Json)
-    $stdout = $a.execution.stdout
-    Record "TC103" "Analyze valid Python" ($stdout -match "hello") "stdout=$stdout"
-} catch { Record "TC103" "Analyze valid Python" $false $_.Exception.Message }
+foreach ($lang in $languages) {
+    try {
+        $a = Invoke-RestMethod -Method Post -Uri "$Base/analyze" -ContentType "application/json" `
+            -WebSession $session -Headers $csrfHeaders `
+            -Body (@{ code = $snippets[$lang]; language = $lang } | ConvertTo-Json)
+        $stdout = $a.meta.execution.stdout
+        Record "TC103" "Analyze valid $lang" ($stdout -match "hello") `
+            "stdout=$($stdout -replace "`n", '\n') error=$($a.meta.execution.error.type)"
+    } catch { Record "TC103" "Analyze valid $lang" $false $_.Exception.Message }
+}
 
 try {
     Invoke-RestMethod -Method Post -Uri "$Base/analyze" -ContentType "application/json" `

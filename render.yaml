@@ -10,10 +10,6 @@ services:
     envVars:
       - key: FLASK_ENV
         value: production
-      # Render has no Docker daemon: native host executor is mandatory.
-      # See analyzer core run_in_sandbox -> _run_host_sandboxed fallback.
-      - key: HOST_EXECUTION_ENABLED
-        value: 1
       # Trust Render router for X-Forwarded-* (correct IP/scheme/host
       # behind Vercel /api proxy -> Render). Do not increase blindly.
       - key: TRUSTED_PROXY_COUNT
@@ -38,11 +34,14 @@ services:
       # Never "*": ProductionConfig.validate() rejects wildcards.
       - key: ALLOWED_ORIGINS
         sync: false
-      # Required in production: gates POST /api/v1/analyze via X-API-Key
-      # (401 without/invalid key). Prevents anonymous arbitrary code exec
-      # on the weaker host sandbox. No code change: existing
-      # ANALYZE_API_KEY check in app_pkg/blueprints/api/routes.py enforced.
-      - key: ANALYZE_API_KEY
+      # Execution runner: the VM that owns the Docker daemon. Without these,
+      # the API host tries to sandbox locally, finds no daemon, and every
+      # language comes back SandboxUnavailable. Must match the runner's
+      # EXECUTION_RUNNER_SECRET. Leave HOST_EXECUTION_ENABLED unset — prod
+      # refuses to boot with it on.
+      - key: EXECUTION_RUNNER_URL
+        sync: false
+      - key: EXECUTION_RUNNER_SECRET
         sync: false
       # GitHub OAuth (optional — only set if OAuth login is enabled).
       # Callback URL registered in GitHub OAuth app must be:

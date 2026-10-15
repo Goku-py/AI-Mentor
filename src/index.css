@@ -166,7 +166,6 @@ body {
 .light-mode .language-select:hover,
 .light-mode .language-select:focus { border-color: #0969da; }
 .language-select option { background: var(--panel-bg); color: var(--text-primary); }
-.language-select-display { display: none; }
 
 /* Buttons */
 .run-btn {
@@ -333,7 +332,6 @@ body {
 }
 
 /* Markdown inside mentor */
-.mentor-content p { margin-bottom: 1rem; }
 .mentor-content code {
   background: rgba(110, 118, 129, 0.4);
   padding: 0.2em 0.4em;
@@ -351,7 +349,6 @@ body {
   border: 1px solid var(--border-color);
 }
 .mentor-content pre code { background: transparent; padding: 0; }
-.mentor-content ul, .mentor-content ol { padding-left: 1.5rem; margin-bottom: 1rem; }
 
 .placeholder-text {
   color: var(--text-secondary);
@@ -362,14 +359,12 @@ body {
   justify-content: center;
   height: 100%;
   text-align: center;
-  opacity: 0.7;
+  /* No opacity here: at 0.7 this text measured 3.45:1 (dark) / 3.23:1 (light),
+     below WCAG AA 4.5:1. Full-strength secondary text is 5.62:1 / 6.39:1. */
   gap: 0.5rem;
 }
-.placeholder-text svg { opacity: 0.5; width: 48px; height: 48px; margin-bottom: 0.25rem; }
+.placeholder-text svg { opacity: 0.7; width: 48px; height: 48px; margin-bottom: 0.25rem; }
 
-.error-text { color: var(--error); }
-.success-text { color: var(--success); }
-.warning-text { color: var(--warning); }
 .accent-text { color: var(--primary-accent); }
 
 /* Loading / empty / error states */
@@ -401,19 +396,6 @@ body {
   line-height: 1.4;
 }
 .light-mode .error-banner { background: #ffebe9; border-color: #ff8182; color: #cf222e; }
-
-.empty-state {
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 0.75rem;
-  padding: 2rem 1rem;
-  text-align: center;
-  color: var(--text-secondary);
-}
-.empty-state-title { font-size: 0.95rem; font-weight: 600; color: var(--text-primary); }
-.empty-state-desc { font-size: 0.85rem; max-width: 28ch; line-height: 1.5; }
 
 /* Scrollbar */
 ::-webkit-scrollbar { width: 8px; height: 8px; }

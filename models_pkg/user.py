@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from datetime import UTC, datetime
 
+from sqlalchemy.orm import validates
 from werkzeug.security import check_password_hash, generate_password_hash
 
 from .extensions import db
@@ -31,6 +32,14 @@ class User(db.Model):
     locked_until = db.Column(db.DateTime(timezone=True), nullable=True)
 
     audit_logs = db.relationship("AuditLog", backref="user", lazy="dynamic")
+
+    @validates("role")
+    def _validate_role(self, _key: str, value: str) -> str:
+        """Guard against a role outside VALID_ROLES reaching the DB or to_dict()."""
+        if value not in VALID_ROLES:
+            msg = f"invalid role {value!r}; expected one of {sorted(VALID_ROLES)}"
+            raise ValueError(msg)
+        return value
 
     def set_password(self, password: str) -> None:
         self.password_hash = generate_password_hash(password)

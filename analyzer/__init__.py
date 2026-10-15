@@ -1,13 +1,4 @@
 from analyzer.core import (
-    APIError as APIError,
-)
-from analyzer.core import (
-    ContainerError as ContainerError,
-)
-from analyzer.core import (
-    DockerException as DockerException,
-)
-from analyzer.core import (
     Issue as Issue,
 )
 from analyzer.core import (
@@ -86,6 +77,9 @@ from analyzer.core import (
     docker as docker,
 )
 from analyzer.core import (
+    execution_is_remote as execution_is_remote,
+)
+from analyzer.core import (
     run_in_sandbox as run_in_sandbox,
 )
 from analyzer.core import (
@@ -126,6 +120,9 @@ from analyzer.mentorship import (
 )
 from analyzer.mentorship import (
     MAX_GLOBAL_AI_CALLS_PER_DAY as MAX_GLOBAL_AI_CALLS_PER_DAY,
+)
+from analyzer.mentorship import (
+    _ai_cache_key as _ai_cache_key,
 )
 from analyzer.mentorship import (
     _ai_mentor_status_from_feedback as _ai_mentor_status_from_feedback,

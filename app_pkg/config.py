@@ -52,7 +52,9 @@ class BaseConfig:
     JWT_SECRET_KEY: str = (os.environ.get("JWT_SECRET_KEY") or "").strip() or secrets.token_hex(32)
     JWT_ACCESS_TOKEN_EXPIRES = timedelta(minutes=15)
     JWT_REFRESH_TOKEN_EXPIRES = timedelta(days=30)
-    JWT_TOKEN_LOCATION: ClassVar[list] = ["headers", "cookies"]
+    # Headers only: the backend never sets an access-token cookie, so accepting one
+    # would let a cookie ambiently authenticate state-changing endpoints (e.g. /analyze).
+    JWT_TOKEN_LOCATION: ClassVar[list] = ["headers"]
     JWT_COOKIE_CSRF_PROTECT: bool = True
     JWT_COOKIE_SAMESITE: str = "Lax"
 
@@ -106,14 +108,27 @@ class BaseConfig:
     ACCOUNT_LOCKOUT_MINUTES: int = int(os.environ.get("ACCOUNT_LOCKOUT_MINUTES", "15"))
 
     # ------------------------------------------------------------------
-    # JWT token blacklist (in-memory for dev, Redis for prod)
+    # JWT token blacklist storage (in-memory for dev, Redis for prod).
+    # The enabled/storage decision is resolved once in create_app()'s
+    # _init_extensions(), which overwrites both keys on app.config.
     # ------------------------------------------------------------------
-    JWT_BLACKLIST_ENABLED: bool = os.environ.get(
-        "JWT_BLACKLIST_ENABLED", "False"
-    ).strip().lower() in ("1", "true", "yes")
     JWT_BLACKLIST_STORAGE_URI: str = os.environ.get(
         "JWT_BLACKLIST_STORAGE_URI", "memory://"
     )
+
+    # ------------------------------------------------------------------
+    # Host (non-Docker) code execution. Running untrusted student code as a
+    # direct child of the Flask process has no namespace/uid/network isolation,
+    # so it is forbidden in Production — Docker sandbox only.
+    # analyzer/core.py::_host_execution_allowed() is the consumer to migrate.
+    # ------------------------------------------------------------------
+    ALLOW_HOST_EXECUTION: bool = os.environ.get("HOST_EXECUTION_ENABLED") == "1"
+
+    # ------------------------------------------------------------------
+    # Shared secret required of anonymous /analyze callers (X-API-Key).
+    # Read from app.config at request time so it can be overridden in tests.
+    # ------------------------------------------------------------------
+    ANALYZE_API_KEY: str = (os.environ.get("ANALYZE_API_KEY") or "").strip()
 
 
 # Set pool options AFTER class definition so _db_engine_options() can be called cleanly
@@ -131,6 +146,8 @@ class DevelopmentConfig(BaseConfig):
 class ProductionConfig(BaseConfig):
     DEBUG: bool = False
     MAX_CONTENT_LENGTH: int = 512 * 1024
+    # Untrusted code must go through the Docker sandbox in Production.
+    ALLOW_HOST_EXECUTION: bool = False
     JWT_COOKIE_SECURE: bool = True
     SESSION_COOKIE_SECURE: bool = True
     SESSION_COOKIE_HTTPONLY: bool = True
@@ -153,7 +170,7 @@ class ProductionConfig(BaseConfig):
             msg = (
                 "CRITICAL ERROR: FLASK_DEBUG env var is set to a truthy value in Production. "
                 "This enables the Werkzeug debugger, which allows arbitrary code execution. "
-                "Delete the FLASK_DEBUG env var from Railway dashboard."
+                "Delete the FLASK_DEBUG env var from the hosting dashboard."
             )
             raise RuntimeError(msg)
 
@@ -163,6 +180,16 @@ class ProductionConfig(BaseConfig):
                 "CRITICAL ERROR: DATABASE_URL points to SQLite in Production. "
                 "SQLite does not support concurrent Gunicorn workers. "
                 "Set DATABASE_URL to a PostgreSQL connection string."
+            )
+            raise RuntimeError(msg)
+
+        if os.environ.get("HOST_EXECUTION_ENABLED") == "1":
+            msg = (
+                "CRITICAL ERROR: HOST_EXECUTION_ENABLED=1 is not permitted in Production. "
+                "Running untrusted student code as a direct child of the app has no "
+                "namespace/uid/network isolation. Untrusted code requires the Docker "
+                "sandbox. Delete the HOST_EXECUTION_ENABLED env var from the hosting "
+                "dashboard."
             )
             raise RuntimeError(msg)
 
@@ -200,7 +227,7 @@ class ProductionConfig(BaseConfig):
                 continue
             if "${{" in uri:
                 msg = (
-                    f"CRITICAL ERROR: {name} has unresolved Railway ref ({uri}). "
+                    f"CRITICAL ERROR: {name} has unresolved platform ref ({uri}). "
                     "Provision Redis (New → Database → Redis) or "
                     f"delete {name} from env vars (app auto-detects REDIS_URL)."
                 )
@@ -208,7 +235,7 @@ class ProductionConfig(BaseConfig):
             if uri.startswith("/"):
                 msg = (
                     f"CRITICAL ERROR: {name} starts with '/' ({uri}). "
-                    "Unresolved Railway ${{Redis.REDIS_URL}} — Redis plugin not linked. "
+                    "Unresolved ${{Redis.REDIS_URL}} reference — Redis service not linked. "
                     "Delete this env var — the app auto-detects REDIS_URL."
                 )
                 raise RuntimeError(msg)
@@ -231,9 +258,9 @@ class ProductionConfig(BaseConfig):
 
         if not _has_redis:
             current_app.logger.warning(
-                "Production: No REDIS_URL detected. Rate limits are per-worker "
-                "(4 workers x 10 req/min = 40 req/min effective). "
-                "Add Redis plugin in Railway dashboard for global rate limiting."
+                "Production: No REDIS_URL detected. Rate limits are process-local "
+                "(per-worker memory). "
+                "Provision a Redis service and set REDIS_URL for global rate limiting."
             )
         elif not _rate_set:
             current_app.logger.info(
@@ -246,8 +273,8 @@ class ProductionConfig(BaseConfig):
             )
         elif not _has_redis and _blacklist_enabled not in {"1", "true", "yes"}:
             current_app.logger.warning(
-                "Production: JWT_BLACKLIST_ENABLED is not set. "
-                "Logout does not invalidate JWT tokens until Redis is provisioned."
+                "Production: JWT revocation is process-local (cleared on worker restart). "
+                "Set REDIS_URL for durable global revocation."
             )
 
 
@@ -267,6 +294,8 @@ class TestingConfig(BaseConfig):
     WTF_CSRF_ENABLED: bool = False  # no CSRF token needed in test client
     RATELIMIT_ENABLED: bool = False  # disable per-test rate-limit pollution
     JWT_COOKIE_SECURE: bool = False  # allow cookies over HTTP in tests
+    # Enforced by _init_extensions(): revocation state must stay process-local in pytest.
+    JWT_BLACKLIST_ENABLED: bool = False
 
 
 # Map name → class for create_app(config_name="testing") style

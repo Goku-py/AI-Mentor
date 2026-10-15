@@ -6,8 +6,8 @@ import type {
   AiMentorStatus,
   ExecutionResult,
 } from "../types";
-import { DEFAULT_CODE, EXTENSION_MAP, SUPPORTED_LANGUAGES } from "../types";
-import { analyzeCode, fetchCsrfToken } from "../services/api";
+import { DEFAULT_CODE, EXTENSION_MAP, MAX_CODE_CHARS, MAX_FILE_SIZE, SUPPORTED_LANGUAGES } from "../types";
+import { analyzeCode } from "../services/api";
 import { showToast } from "../components/Toast";
 
 const inferAiMentorStatus = (feedback: string): AiMentorStatus => {
@@ -45,7 +45,6 @@ const formatExecutionError = (execution: ExecutionResult | null | undefined, fal
 
 export interface UseCodeOptions {
   accessToken: string | null;
-  csrfToken: string;
   tryRefreshToken: () => Promise<string | null>;
   onUnauthenticated: () => void;
 }
@@ -70,14 +69,11 @@ export interface UseCodeReturn {
   handleRun: () => Promise<void>;
   clearOutput: () => void;
   clearMismatch: () => void;
-  handleShare: () => Promise<void>;
   handleFileChange: (e: React.ChangeEvent<HTMLInputElement>) => void;
 }
 
-const MAX_FILE_SIZE = 1024 * 1024;
-
 export function useCode(options: UseCodeOptions): UseCodeReturn {
-  const { accessToken, csrfToken, tryRefreshToken, onUnauthenticated } = options;
+  const { accessToken, tryRefreshToken, onUnauthenticated } = options;
 
   const [code, setCode] = useState<string>(DEFAULT_CODE.python);
   const [language, setLanguage] = useState<string>("python");
@@ -150,32 +146,14 @@ export function useCode(options: UseCodeOptions): UseCodeReturn {
     setMismatchInfo(null);
 
     try {
-      let token = csrfToken;
-      if (!token) {
-        for (let attempt = 0; attempt < 3; attempt++) {
-          try {
-            token = await fetchCsrfToken(controller.signal);
-            if (token) break;
-          } catch {
-            token = "";
-          }
-          if (attempt < 2) await new Promise((r) => setTimeout(r, 500 * (attempt + 1)));
-        }
-        if (!token) {
-          setErrorMsg("Session verification failed. Please refresh the page.");
-          setMentorFeedback("");
-          setIsAnalyzing(false);
-          return;
-        }
-      }
-      let response = await analyzeCode(code, language, accessToken, token, controller.signal);
+      let response = await analyzeCode(code, language, accessToken, controller.signal);
 
       if (response.status === 401 && accessToken) {
         const newToken = await tryRefreshToken();
         if (!newToken) {
           onUnauthenticated();
         }
-        response = await analyzeCode(code, language, newToken || null, token, controller.signal);
+        response = await analyzeCode(code, language, newToken || null, controller.signal);
       }
 
       let data: AnalyzeResponse;
@@ -202,11 +180,12 @@ export function useCode(options: UseCodeOptions): UseCodeReturn {
       }
 
       if (!meta?.mismatch && meta?.execution) {
-        const stdout = meta.execution.stdout || "";
-        setOutput(stdout);
+        setOutput(meta.execution.stdout || "");
 
-        const hasErrorIssues = meta?.issues?.some((i) => i.severity === "error") ?? false;
-        if (hasExecutionError(meta.execution) || (meta.execution.returncode ?? 0) !== 0 || hasErrorIssues) {
+        // Only a real execution failure belongs in the error banner. Static
+        // issues are already listed by OutputPane; folding them in here used to
+        // print "An execution error occurred." over perfectly clean runs.
+        if (hasExecutionError(meta.execution) || (meta.execution.returncode ?? 0) !== 0) {
           setErrorMsg(formatExecutionError(meta.execution));
         }
       } else if (!meta?.mismatch && !data.success) {
@@ -239,7 +218,7 @@ export function useCode(options: UseCodeOptions): UseCodeReturn {
         setIsAnalyzing(false);
       }
     }
-  }, [code, language, accessToken, csrfToken, tryRefreshToken, onUnauthenticated]);
+  }, [code, language, accessToken, tryRefreshToken, onUnauthenticated]);
 
   const handleLanguageChange = useCallback((newLang: string, keepCurrentCode = false) => {
     setLanguage(newLang);
@@ -266,18 +245,12 @@ export function useCode(options: UseCodeOptions): UseCodeReturn {
     setMismatchInfo(null);
   }, []);
 
-  const handleShare = useCallback(async () => {
-    const text = `Code:\n${code}\n\nLanguage: ${language}\nURL: ${window.location.href}`;
-    if (navigator.share) {
-      try { await navigator.share({ text }); } catch { /* user cancelled */ }
-    } else {
-      await navigator.clipboard.writeText(text);
-      showToast("Code copied to clipboard");
-    }
-  }, [code, language]);
-
   const handleFileChange = useCallback((e: React.ChangeEvent<HTMLInputElement>) => {
-    const file = e.target.files?.[0];
+    const input = e.target;
+    const file = input.files?.[0];
+    // Reset first: without this, re-selecting the same file fires no change
+    // event and silently does nothing.
+    input.value = "";
     if (!file) return;
 
     if (file.size > MAX_FILE_SIZE) {
@@ -294,6 +267,10 @@ export function useCode(options: UseCodeOptions): UseCodeReturn {
     const reader = new FileReader();
     reader.onload = (evt: ProgressEvent<FileReader>) => {
       if (typeof evt.target?.result === "string") {
+        if (evt.target.result.length > MAX_CODE_CHARS) {
+          showToast(`File is too long. The server accepts at most ${MAX_CODE_CHARS} characters.`);
+          return;
+        }
         setCode(evt.target.result);
         setLanguage(detectedLang);
       }
@@ -321,7 +298,6 @@ export function useCode(options: UseCodeOptions): UseCodeReturn {
     handleRun,
     clearOutput,
     clearMismatch,
-    handleShare,
     handleFileChange,
   };
 }

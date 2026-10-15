@@ -1,5 +1,5 @@
-"""
-app_pkg/blueprints/api/routes.py — Core API blueprint.
+﻿"""
+app_pkg/blueprints/api/routes.py â€” Core API blueprint.
 
 Endpoints (all prefixed /api/v1):
   GET  /health
@@ -23,7 +23,12 @@ from flask_limiter.util import get_remote_address
 from flask_wtf.csrf import generate_csrf
 from sqlalchemy import text
 
-from analyzer import analyze_code, sandbox_runtime_status, verify_tools
+from analyzer import (
+    analyze_code,
+    execution_is_remote,
+    sandbox_runtime_status,
+    verify_tools,
+)
 from app_pkg.extensions import csrf, db, limiter
 from app_pkg.observability import APP_START_TIME, APP_VERSION
 from app_pkg.security.middleware import SECURITY_METRICS, _add_metric, contains_abuse_pattern
@@ -36,7 +41,6 @@ api_bp = Blueprint("api", __name__, url_prefix="/api/v1")
 # Constants
 # ---------------------------------------------------------------------------
 ALLOWED_LANGUAGES = {"python", "javascript", "js", "java", "c", "cpp", "c++"}
-ALLOWED_DIFFICULTIES = {"beginner", "intermediate", "advanced"}
 SESSION_HISTORY_MAX_RETURNED = 10
 MAX_ANALYZE_CONCURRENCY = max(1, int(os.environ.get("MAX_ANALYZE_CONCURRENCY", "4")))
 _ANALYZE_SEMAPHORE = threading.BoundedSemaphore(value=MAX_ANALYZE_CONCURRENCY)
@@ -47,7 +51,10 @@ AVAILABLE_TOOLS: dict = {}
 
 def _refresh_tools() -> None:
     global AVAILABLE_TOOLS  # noqa: PLW0603
-    AVAILABLE_TOOLS = verify_tools()
+    tools = verify_tools()
+    # The runner VM owns the toolchains; the probe result describes the API host,
+    # so ignore it (only python survives there) and 422 at /analyze.
+    AVAILABLE_TOOLS = dict.fromkeys(tools, True) if execution_is_remote() else tools
 
 
 def _metrics_access_allowed() -> bool:
@@ -77,7 +84,7 @@ def _analyze_rate_limit_key() -> str:
 # Audit log helper
 # ---------------------------------------------------------------------------
 def _write_audit_log(user_id: int | None, language: str, code: str, *, had_error: bool) -> None:
-    """Persist one analyze call (first 200 chars only — GDPR hygiene)."""
+    """Persist one analyze call (first 200 chars only â€” GDPR hygiene)."""
     try:
         entry = AuditLog(
             user_id=user_id,
@@ -234,15 +241,8 @@ def analyze():  # noqa: C901, PLR0911, PLR0912, PLR0915
         if current_user_id is None:
             return jsonify({"ok": False, "error": "Invalid authentication token."}), 401
 
-    required_api_key = (os.environ.get("ANALYZE_API_KEY") or "").strip()
-    provided_api_key = request.headers.get("X-API-Key", "").strip()
-    if required_api_key and not secrets.compare_digest(required_api_key, provided_api_key):
-        _add_metric("auth_failures")
-        return jsonify({"ok": False, "error": "Unauthorized. Missing or invalid API key."}), 401
-
     code = payload.get("code")
     language = payload.get("language", "python")
-    difficulty = payload.get("difficulty", "beginner")
     code_for_history = code if isinstance(code, str) else ""
     language_for_history = language if isinstance(language, str) else "python"
 
@@ -257,18 +257,6 @@ def analyze():  # noqa: C901, PLR0911, PLR0912, PLR0915
             },
         ), 400
     language = language.lower()
-
-    if not isinstance(difficulty, str) or difficulty.lower() not in ALLOWED_DIFFICULTIES:
-        _write_audit_log(current_user_id, language_for_history, code_for_history, had_error=True)
-        return jsonify(
-            {
-                "success": False,
-                "output": "",
-                "error": "Invalid difficulty. Supported values: beginner, intermediate, advanced.",
-                "meta": {"language": language},
-            },
-        ), 400
-    difficulty = difficulty.lower()
 
     if not isinstance(code, str) or not code.strip():
         _write_audit_log(current_user_id, language, code_for_history, had_error=True)
@@ -333,7 +321,7 @@ def analyze():  # noqa: C901, PLR0911, PLR0912, PLR0915
         ), 503
     try:
         t0 = time.monotonic()
-        result = asyncio.run(analyze_code(code=code, language=language, difficulty=difficulty))
+        result = asyncio.run(analyze_code(code=code, language=language))
         execution_time_ms = int((time.monotonic() - t0) * 1000)
 
         issues = result.get("issues", []) if isinstance(result, dict) else []

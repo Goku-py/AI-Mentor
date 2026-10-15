@@ -31,10 +31,13 @@ def get_engine():
 
 
 def get_engine_url():
-    try:
-        return get_engine().url.render_as_string(hide_password=False).replace("%", "%%")
-    except AttributeError:
-        return str(get_engine().url).replace("%", "%%")
+    """Render the DB URL for Alembic with the password masked.
+
+    Online mode connects through the live engine, so this URL is only used for
+    offline (--sql) generation; writing it with hide_password=False put the
+    database password in cleartext into alembic.ini and the logs.
+    """
+    return get_engine().url.render_as_string(hide_password=True).replace("%", "%%")
 
 
 config.set_main_option("sqlalchemy.url", get_engine_url())

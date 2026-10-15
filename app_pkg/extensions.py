@@ -12,6 +12,7 @@ import os
 import time
 from typing import Any
 
+from flask import current_app, has_app_context
 from flask_jwt_extended import JWTManager
 from flask_limiter import Limiter
 from flask_limiter.util import get_remote_address
@@ -31,12 +32,20 @@ migrate = Migrate()
 _redis_pool: Any = None
 
 
-def get_redis_client():
+def get_redis_client(uri: str | None = None):
+    """Return a shared Redis client, or None when no Redis storage is configured.
+
+    ``uri`` should be the already-resolved ``JWT_BLACKLIST_STORAGE_URI`` from app.config
+    (which may have been auto-derived from REDIS_URL). Callers outside an app context
+    fall back to the raw env var.
+    """
     global _redis_pool  # noqa: PLW0603
     if _redis_pool is not None:
         return _redis_pool
 
-    uri = os.environ.get("JWT_BLACKLIST_STORAGE_URI", "memory://")
+    if uri is None and has_app_context():
+        uri = current_app.config.get("JWT_BLACKLIST_STORAGE_URI")
+    uri = uri or os.environ.get("JWT_BLACKLIST_STORAGE_URI", "memory://")
     if not uri.startswith("redis"):
         return None
 
