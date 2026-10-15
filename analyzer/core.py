@@ -120,8 +120,33 @@ def _limit_resources_linux() -> None:
     resource.setrlimit(resource.RLIMIT_FSIZE, (10 * 1024 * 1024, 10 * 1024 * 1024))
 
 
+def _runner_url() -> str:
+    """Base URL of the remote execution runner, or "" when running locally."""
+    return (os.environ.get("EXECUTION_RUNNER_URL") or "").strip()
+
+
+def execution_is_remote() -> bool:
+    """True when execution is delegated to the runner that owns the Docker daemon.
+
+    The API host itself has no toolchains, so local tool detection is meaningless
+    in that mode — the runner VM runs python/node/javac/gcc/g++.
+    """
+    return bool(_runner_url())
+
+
 def sandbox_runtime_status() -> dict[str, Any]:
     """Return runtime sandbox readiness for startup checks."""
+    runner_url = _runner_url()
+    if runner_url:
+        remote = {"ok": False, "mode": "remote", "reason": ""}
+        try:
+            requests.get(f"{runner_url.rstrip('/')}/healthz", timeout=3).raise_for_status()
+        except Exception as exc:  # noqa: BLE001
+            remote["reason"] = f"Execution runner unreachable: {exc}"
+            return remote
+        remote["ok"] = True
+        return remote
+
     status = {
         "ok": False,
         "docker_sdk_installed": docker is not None,
@@ -323,8 +348,7 @@ def run_in_sandbox(
     Set EXECUTION_RUNNER_URL (and EXECUTION_RUNNER_SECRET) to enable; otherwise the
     local Docker path is used.
     """
-    runner_url = (os.environ.get("EXECUTION_RUNNER_URL") or "").strip()
-    if runner_url:
+    if execution_is_remote():
         return _run_via_runner(code, language, image, cmd, timeout)
     return run_in_sandbox_local(code, language, image, cmd, timeout)
 
@@ -336,7 +360,7 @@ def _run_via_runner(
     cmd: Any,
     timeout: int,
 ) -> dict[str, Any]:
-    runner_url = (os.environ.get("EXECUTION_RUNNER_URL") or "").rstrip("/")
+    runner_url = _runner_url().rstrip("/")
     secret = os.environ.get("EXECUTION_RUNNER_SECRET") or ""
     try:
         response = requests.post(

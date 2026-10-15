@@ -77,6 +77,9 @@ from analyzer.core import (
     docker as docker,
 )
 from analyzer.core import (
+    execution_is_remote as execution_is_remote,
+)
+from analyzer.core import (
     run_in_sandbox as run_in_sandbox,
 )
 from analyzer.core import (

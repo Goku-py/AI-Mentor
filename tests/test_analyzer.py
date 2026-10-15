@@ -26,6 +26,7 @@ from analyzer import (
     _run_gcc,
     _sandbox_image,
     analyze_code,
+    core,
     run_in_sandbox,
     sandbox_runtime_status,
     verify_tools,
@@ -41,6 +42,22 @@ VALID_JAVA = (
 )
 VALID_C = '#include <stdio.h>\nint main(void) {\n    printf("hi\\n");\n    return 0;\n}'
 PINNED_PYTHON_IMAGE = "python:3.11-slim@sha256:" + "a" * 64
+VALID_CPP = '#include <iostream>\nint main() { std::cout << "hello"; return 0; }'
+RUNNER_SNIPPETS = {
+    "python": "print('hello')",
+    "javascript": VALID_JS,
+    "java": VALID_JAVA,
+    "c": VALID_C,
+    "cpp": VALID_CPP,
+}
+# language -> (expected sandbox image key, token that must appear in cmd)
+RUNNER_EXPECTED = {
+    "python": ("python", "python"),
+    "javascript": ("javascript", "node"),
+    "java": ("java", "javac"),
+    "c": ("gcc", "gcc"),
+    "cpp": ("gcc", "g++"),
+}
 
 # conftest's autouse mock_ai_mentorship replaces analyzer.mentorship._get_ai_mentorship
 # with a stub for the duration of every test, so grab the real coroutine at import
@@ -74,6 +91,47 @@ class TestToolVerification:
         status = sandbox_runtime_status()
         assert "ok" in status
         assert "mode" in status
+
+    def test_sandbox_status_reports_remote_mode(self, monkeypatch):
+        """Runner URL configured -> mode is remote, ok pings the runner."""
+        monkeypatch.setenv("EXECUTION_RUNNER_URL", "http://runner:5001")
+        calls = {}
+
+        class _Resp:
+            def raise_for_status(self):
+                return None
+
+        def fake_get(url, timeout):
+            calls["url"] = url
+            calls["timeout"] = timeout
+            return _Resp()
+
+        monkeypatch.setattr(core.requests, "get", fake_get)
+        status = core.sandbox_runtime_status()
+        assert status["ok"] is True
+        assert status["mode"] == "remote"
+        assert calls["url"] == "http://runner:5001/healthz"
+
+    def test_sandbox_status_remote_unreachable(self, monkeypatch):
+        """A dead runner must report ok=False, not fall back to local Docker."""
+        monkeypatch.setenv("EXECUTION_RUNNER_URL", "http://runner:5001")
+
+        def boom(url, timeout):
+            raise OSError("connection refused")  # noqa: TRY003
+
+        monkeypatch.setattr(core.requests, "get", boom)
+        status = core.sandbox_runtime_status()
+        assert status["ok"] is False
+        assert status["mode"] == "remote"
+        assert "unreachable" in status["reason"]
+
+    def test_execution_is_remote_follows_env(self, monkeypatch):
+        monkeypatch.delenv("EXECUTION_RUNNER_URL", raising=False)
+        assert core.execution_is_remote() is False
+        monkeypatch.setenv("EXECUTION_RUNNER_URL", "  ")
+        assert core.execution_is_remote() is False
+        monkeypatch.setenv("EXECUTION_RUNNER_URL", "http://runner:5001")
+        assert core.execution_is_remote() is True
 
     def test_sandbox_unavailable_returns_safe_error(self, monkeypatch):
         """Missing Docker should fail closed with SandboxUnavailable."""
@@ -533,6 +591,50 @@ class TestUnavailableToolPaths:
     async def test_c_reports_unavailable(self):
         result = await analyze_code(VALID_C, "c")
         assert result["execution"]["error"]["type"] == "SandboxUnavailable"
+
+
+class TestRunnerDispatch:
+    """With a runner configured, every language must be POSTed to it verbatim."""
+
+    @pytest.fixture
+    def dispatched(self, monkeypatch):
+        monkeypatch.setenv("EXECUTION_RUNNER_URL", "http://runner:5001/")
+        monkeypatch.setenv("EXECUTION_RUNNER_SECRET", "s3cret")
+        app = flask.Flask(__name__)
+        app.config["SANDBOX_IMAGES"] = {
+            key: f"{key}:tag@sha256:{'a' * 64}" for key in ("python", "javascript", "gcc", "java")
+        }
+        calls = []
+
+        class _Resp:
+            def raise_for_status(self):
+                return None
+
+            def json(self):
+                return {"stdout": "hello", "stderr": "", "returncode": 0}
+
+        def fake_post(url, json=None, headers=None, timeout=None):
+            calls.append({"url": url, "json": json, "headers": headers, "timeout": timeout})
+            return _Resp()
+
+        monkeypatch.setattr(core.requests, "post", fake_post)
+        with app.app_context():
+            yield calls
+
+    @pytest.mark.parametrize("language", sorted(RUNNER_SNIPPETS))
+    @pytest.mark.asyncio
+    @pytest.mark.usefixtures("dispatched")
+    async def test_language_reaches_runner(self, dispatched, language):
+        image_key, token = RUNNER_EXPECTED[language]
+        await analyze_code(RUNNER_SNIPPETS[language], language)
+
+        assert len(dispatched) == 1, language
+        call = dispatched[0]
+        assert call["url"] == "http://runner:5001/execute"
+        assert call["headers"]["Authorization"] == "Bearer s3cret"
+        assert call["json"]["image"].startswith(f"{image_key}:")
+        assert token in " ".join(call["json"]["cmd"])
+        assert call["json"]["language"] == language
 
 
 class TestCompilerOutputParsing:

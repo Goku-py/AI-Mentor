@@ -8,6 +8,8 @@ import json
 
 import pytest
 
+from app_pkg.blueprints.api import routes as api_routes
+
 # client and auth_headers fixtures are provided by tests/conftest.py
 
 
@@ -243,6 +245,49 @@ class TestAnalyzeEndpoint:
         assert response.status_code == 400
         data = json.loads(response.data)
         assert "security policy" in data.get("error", "").lower()
+
+
+class TestLanguageAvailability:
+    """The API host has no toolchains when execution runs on the runner VM."""
+
+    @pytest.fixture(autouse=True)
+    def _restore_tools(self):
+        original = api_routes.AVAILABLE_TOOLS
+        yield
+        api_routes.AVAILABLE_TOOLS = original
+
+    @pytest.mark.parametrize("language", ["javascript", "java", "c", "cpp"])
+    def test_remote_runner_does_not_422_missing_tools(self, client, monkeypatch, language):
+        """On Render only python exists locally; the gate must not fire."""
+        monkeypatch.setenv("EXECUTION_RUNNER_URL", "http://runner:5001")
+        api_routes._refresh_tools()  # noqa: SLF001
+        assert api_routes.AVAILABLE_TOOLS[language] is True
+
+        response = client.post(
+            "/api/v1/analyze",
+            data=json.dumps({"code": "int x = 1;", "language": language}),
+            content_type="application/json",
+        )
+        assert response.status_code != 422
+
+    def test_local_mode_still_422_missing_tools(self, client, monkeypatch):
+        """Without a runner, a missing toolchain is still an explicit 422."""
+        monkeypatch.delenv("EXECUTION_RUNNER_URL", raising=False)
+        monkeypatch.setattr(
+            api_routes,
+            "verify_tools",
+            lambda: dict.fromkeys(["python", "javascript", "js", "java", "c", "cpp"], False),
+        )
+        api_routes._refresh_tools()  # noqa: SLF001
+        assert api_routes.AVAILABLE_TOOLS["java"] is False
+
+        response = client.post(
+            "/api/v1/analyze",
+            data=json.dumps({"code": "public class Main {}", "language": "java"}),
+            content_type="application/json",
+        )
+        assert response.status_code == 422
+        assert "not installed" in json.loads(response.data)["error"]
 
 
 class TestHistoryEndpoint:

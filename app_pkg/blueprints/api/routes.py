@@ -23,7 +23,12 @@ from flask_limiter.util import get_remote_address
 from flask_wtf.csrf import generate_csrf
 from sqlalchemy import text
 
-from analyzer import analyze_code, sandbox_runtime_status, verify_tools
+from analyzer import (
+    analyze_code,
+    execution_is_remote,
+    sandbox_runtime_status,
+    verify_tools,
+)
 from app_pkg.extensions import csrf, db, limiter
 from app_pkg.observability import APP_START_TIME, APP_VERSION
 from app_pkg.security.middleware import SECURITY_METRICS, _add_metric, contains_abuse_pattern
@@ -46,7 +51,10 @@ AVAILABLE_TOOLS: dict = {}
 
 def _refresh_tools() -> None:
     global AVAILABLE_TOOLS  # noqa: PLW0603
-    AVAILABLE_TOOLS = verify_tools()
+    tools = verify_tools()
+    # The runner VM owns the toolchains; the probe result describes the API host,
+    # so ignore it (only python survives there) and 422 at /analyze.
+    AVAILABLE_TOOLS = dict.fromkeys(tools, True) if execution_is_remote() else tools
 
 
 def _metrics_access_allowed() -> bool:
