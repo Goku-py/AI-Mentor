@@ -25,14 +25,28 @@ export default function AuthModal({
 }: AuthModalProps) {
   const previousFocus = useRef<HTMLElement | null>(null);
   const modalRef = useRef<HTMLDivElement>(null);
+  const onCloseRef = useRef(onClose);
 
+  // Kept current so the mount-only keydown handler never closes over a stale
+  // prop. Without this, typing re-renders App, which hands us a new onClose
+  // identity every keystroke.
+  useEffect(() => {
+    onCloseRef.current = onClose;
+  });
+
+  // Focus management is mount-only. Re-running it on every render (via a prop
+  // dep) yanked focus back to the email field on each keystroke and made
+  // typing a password impossible.
   useEffect(() => {
     previousFocus.current = document.activeElement as HTMLElement | null;
-    const emailInput = document.getElementById("auth-email");
-    emailInput?.focus();
+    document.getElementById("auth-email")?.focus();
+    return () => previousFocus.current?.focus();
+  }, []);
 
+  // Scroll lock + dismissal keys are also mount-only.
+  useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
-      if (e.key === "Escape") onClose();
+      if (e.key === "Escape") onCloseRef.current();
       if (e.key === "Tab" && modalRef.current) {
         const focusable = modalRef.current.querySelectorAll<HTMLElement>(
           'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
@@ -59,9 +73,22 @@ export default function AuthModal({
     return () => {
       document.removeEventListener("keydown", handleKeyDown);
       document.body.style.overflow = prevOverflow;
-      previousFocus.current?.focus();
     };
-  }, [onClose]);
+  }, []);
+
+  const handleTabKeyDown = (e: React.KeyboardEvent<HTMLButtonElement>) => {
+    if (e.key !== "ArrowLeft" && e.key !== "ArrowRight" && e.key !== "Home" && e.key !== "End") return;
+    const order: AuthTab[] = ["login", "register"];
+    const idx = order.indexOf(authTab);
+    const next =
+      e.key === "Home" ? 0
+        : e.key === "End" ? order.length - 1
+          : e.key === "ArrowLeft" ? (idx - 1 + order.length) % order.length
+            : (idx + 1) % order.length;
+    e.preventDefault();
+    onTabChange(order[next]);
+    document.getElementById(next === 0 ? "tab-login" : "tab-register")?.focus();
+  };
 
   const headingId = authTab === "login" ? "auth-title-login" : "auth-title-register";
 
@@ -92,6 +119,8 @@ export default function AuthModal({
             id="tab-login"
             className={`auth-tab ${authTab === "login" ? "active" : ""}`}
             onClick={() => onTabChange("login")}
+            onKeyDown={handleTabKeyDown}
+            tabIndex={authTab === "login" ? 0 : -1}
             type="button"
           >
             Sign In
@@ -103,6 +132,8 @@ export default function AuthModal({
             id="tab-register"
             className={`auth-tab ${authTab === "register" ? "active" : ""}`}
             onClick={() => onTabChange("register")}
+            onKeyDown={handleTabKeyDown}
+            tabIndex={authTab === "register" ? 0 : -1}
             type="button"
           >
             Create Account

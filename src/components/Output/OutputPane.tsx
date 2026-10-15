@@ -1,6 +1,9 @@
+import { useMemo } from "react";
 import { TerminalIcon } from "../Icons";
 import type { Issue, MismatchInfo } from "../../types";
 import { SUPPORTED_LANGUAGES } from "../../types";
+
+const issueKey = (i: Issue) => `${i.code ?? ""}:${i.line ?? ""}:${i.message}`;
 
 interface OutputPaneProps {
   output: string;
@@ -21,6 +24,15 @@ export default function OutputPane({
   onLanguageChange,
   onClearMismatch,
 }: OutputPaneProps) {
+  // One pass instead of four, and keys derived from content so React reuses
+  // rows correctly when the list shifts.
+  const { errors, warnings } = useMemo(() => {
+    const e: Issue[] = [];
+    const w: Issue[] = [];
+    for (const issue of issues) (issue.severity === "error" ? e : w).push(issue);
+    return { errors: e, warnings: w };
+  }, [issues]);
+
   return (
     <section className="output-pane" aria-label="Standard output and code issues">
       <h2 className="pane-header">
@@ -72,7 +84,7 @@ export default function OutputPane({
           <div className="placeholder-text" role="note">Outputs and issues will appear here when you run code.</div>
         )}
 
-        {issues.filter((i) => i.severity === "error").length > 0 && (
+        {errors.length > 0 && (
           <div
             style={{
               marginBottom: (output || errorMsg) ? "1rem" : 0,
@@ -81,15 +93,15 @@ export default function OutputPane({
             }}
           >
             <div style={{ fontWeight: 600, marginBottom: "0.5rem", color: "#ff7b72" }}>Errors:</div>
-            {issues.filter((i) => i.severity === "error").map((i: Issue, idx: number) => (
-              <div key={idx} style={{ color: "#ff7b72", fontSize: "0.9em", marginBottom: "0.2rem" }}>
-                [Line {i.line}] {i.message}
+            {errors.map((i: Issue) => (
+              <div key={issueKey(i)} style={{ color: "#ff7b72", fontSize: "0.9em", marginBottom: "0.2rem" }}>
+                {i.line != null ? `[Line ${i.line}] ` : ""}{i.message}
               </div>
             ))}
           </div>
         )}
 
-        {issues.filter((i) => i.severity !== "error").length > 0 && (
+        {warnings.length > 0 && (
           <div
             style={{
               marginBottom: (output || errorMsg) ? "1rem" : 0,
@@ -98,9 +110,9 @@ export default function OutputPane({
             }}
           >
             <div style={{ fontWeight: 600, marginBottom: "0.5rem", color: "var(--text-secondary)" }}>Warnings & Suggestions:</div>
-            {issues.filter((i) => i.severity !== "error").map((i: Issue, idx: number) => (
-              <div key={idx} style={{ color: "var(--warning)", fontSize: "0.9em", marginBottom: "0.2rem" }}>
-                [Line {i.line}] {i.message}
+            {warnings.map((i: Issue) => (
+              <div key={issueKey(i)} style={{ color: "var(--warning)", fontSize: "0.9em", marginBottom: "0.2rem" }}>
+                {i.line != null ? `[Line ${i.line}] ` : ""}{i.message}
               </div>
             ))}
           </div>

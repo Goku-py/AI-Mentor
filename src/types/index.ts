@@ -1,7 +1,7 @@
 export interface User {
   id: number;
   email: string;
-  role: "student" | "admin";
+  role: "student" | "teacher" | "admin";
 }
 
 export interface AuthForm {
@@ -48,18 +48,12 @@ export interface AnalyzeMeta {
   execution?: ExecutionResult;
 }
 
+// ponytail: mirrors the real POST /analyze payload exactly — top-level
+// duplicates of meta.* were never read and only let the e2e mocks drift.
 export interface AnalyzeResponse {
   success: boolean;
   output?: string;
   error?: string;
-  issues?: Issue[];
-  mismatch?: MismatchInfo;
-  language?: string;
-  detected_language?: string;
-  execution?: ExecutionResult;
-  ai_mentor_feedback?: string;
-  ai_mentor_status?: string;
-  ok?: boolean;
   meta?: AnalyzeMeta;
 }
 
@@ -79,8 +73,11 @@ export type LanguageId = (typeof SUPPORTED_LANGUAGES)[number]["id"];
 export const EXTENSION_MAP: Record<string, string> = {
   py: "python",
   js: "javascript",
+  mjs: "javascript",
+  jsx: "javascript",
   java: "java",
   c: "c",
+  h: "c",
   cpp: "cpp",
   cc: "cpp",
   cxx: "cpp",
@@ -97,11 +94,11 @@ export const DEFAULT_CODE: Record<string, string> = {
 export const aiMentorStatusCopy: Record<string, { title: string; body: string }> = {
   disabled: {
     title: "AI Mentor is disabled.",
-    body: "Set GEMINI_API_KEY in the server environment to enable AI guidance.",
+    body: "AI guidance is unavailable right now. Only the compiler and static checks are running.",
   },
   api_error: {
     title: "AI Mentor could not reach Gemini.",
-    body: "Check GEMINI_API_KEY, GEMINI_MODEL, and whether the Gemini API is enabled for the key.",
+    body: "The AI service is unreachable right now. Only the compiler and static checks are running.",
   },
   quota_exceeded: {
     title: "AI Mentor quota is exhausted.",
@@ -112,3 +109,8 @@ export const aiMentorStatusCopy: Record<string, { title: string; body: string }>
     body: "The code still ran; retry once, or check the server logs if this keeps happening.",
   },
 };
+
+// Backend rejects code above 102400 characters; the file picker allows a
+// larger read so the user gets a precise message instead of a server error.
+export const MAX_CODE_CHARS = 102_400;
+export const MAX_FILE_SIZE = 1024 * 1024;

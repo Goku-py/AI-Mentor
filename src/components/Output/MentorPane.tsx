@@ -71,7 +71,7 @@ export default function MentorPane({
           <div className="placeholder-text">
             I will help explain any errors and how to fix them!
             <br /><br />
-            (Note: Ensure your GEMINI_API_KEY is set in the server&apos;s .env file to enable AI Mentorship)
+            Check the compiler output below for the exact line and message.
           </div>
         ) : (
           <div className="placeholder-text">

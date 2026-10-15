@@ -1,3 +1,4 @@
+import { useCallback } from "react";
 import { useAuth } from "./hooks/useAuth";
 import { useSettings } from "./hooks/useSettings";
 import { useCode } from "./hooks/useCode";
@@ -27,10 +28,26 @@ export default function App() {
   const settings = useSettings();
   const code = useCode({
     accessToken: auth.accessToken,
-    csrfToken: auth.csrfToken,
     tryRefreshToken: auth.tryRefreshToken,
     onUnauthenticated: auth.handleUnauthenticated,
   });
+
+  const { setShowAuthModal, setAuthTab, setAuthError } = auth;
+  const { fileInputRef, handleLanguageChange: setLanguage } = code;
+
+  // Stable identities: fresh inline arrows on every render would defeat
+  // React.memo on Toolbar and re-trigger prop-dependent effects elsewhere.
+  const handleAuthModalClose = useCallback(() => setShowAuthModal(false), [setShowAuthModal]);
+  const handleAuthTabChange = useCallback((tab: "login" | "register") => {
+    setAuthTab(tab);
+    setAuthError("");
+  }, [setAuthTab, setAuthError]);
+  const handleLoginClick = useCallback(() => {
+    setShowAuthModal(true);
+    setAuthTab("login");
+  }, [setShowAuthModal, setAuthTab]);
+  const handleLanguageChange = useCallback((lang: string) => setLanguage(lang), [setLanguage]);
+  const handleFileUploadClick = useCallback(() => fileInputRef.current?.click(), [fileInputRef]);
 
   const isNotFound = typeof window !== "undefined" && window.location.pathname !== "/" && window.location.pathname !== "/index.html";
   if (isNotFound) {
@@ -39,7 +56,7 @@ export default function App() {
         <a className="skip-link" href="#main-content">Skip to content</a>
         <div className="app-container">
           <Toolbar
-            code={code.code}
+            canRun={Boolean(code.code.trim())}
             language={code.language}
             fontSize={settings.fontSize}
             darkMode={settings.darkMode}
@@ -48,15 +65,14 @@ export default function App() {
             user={auth.user}
             onRun={code.handleRun}
             onCycleLanguage={code.cycleLanguage}
-            onLanguageChange={(lang) => code.handleLanguageChange(lang)}
+            onLanguageChange={handleLanguageChange}
             onIncreaseFont={settings.increaseFont}
             onDecreaseFont={settings.decreaseFont}
             onToggleDarkMode={settings.toggleDarkMode}
             onToggleFullscreen={settings.toggleFullscreen}
-            onShare={code.handleShare}
             onClearOutput={code.clearOutput}
-            onFileUploadClick={() => code.fileInputRef.current?.click()}
-            onLoginClick={() => { auth.setShowAuthModal(true); auth.setAuthTab("login"); }}
+            onFileUploadClick={handleFileUploadClick}
+            onLoginClick={handleLoginClick}
             onLogout={auth.handleLogout}
           />
           <NotFound />
@@ -76,8 +92,8 @@ export default function App() {
             authForm={auth.authForm}
             authError={auth.authError}
             authLoading={auth.authLoading}
-            onClose={() => auth.setShowAuthModal(false)}
-            onTabChange={(tab) => { auth.setAuthTab(tab); auth.setAuthError(""); }}
+            onClose={handleAuthModalClose}
+            onTabChange={handleAuthTabChange}
             onFormChange={auth.setAuthForm}
             onSubmit={auth.handleAuthSubmit}
           />
@@ -95,7 +111,7 @@ export default function App() {
         />
 
         <Toolbar
-          code={code.code}
+          canRun={Boolean(code.code.trim())}
           language={code.language}
           fontSize={settings.fontSize}
           darkMode={settings.darkMode}
@@ -104,15 +120,14 @@ export default function App() {
           user={auth.user}
           onRun={code.handleRun}
           onCycleLanguage={code.cycleLanguage}
-          onLanguageChange={(lang) => code.handleLanguageChange(lang)}
+          onLanguageChange={handleLanguageChange}
           onIncreaseFont={settings.increaseFont}
           onDecreaseFont={settings.decreaseFont}
           onToggleDarkMode={settings.toggleDarkMode}
           onToggleFullscreen={settings.toggleFullscreen}
-          onShare={code.handleShare}
           onClearOutput={code.clearOutput}
-          onFileUploadClick={() => code.fileInputRef.current?.click()}
-          onLoginClick={() => { auth.setShowAuthModal(true); auth.setAuthTab("login"); }}
+          onFileUploadClick={handleFileUploadClick}
+          onLoginClick={handleLoginClick}
           onLogout={auth.handleLogout}
         />
 

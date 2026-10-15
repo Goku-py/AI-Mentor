@@ -98,34 +98,44 @@ export function useAuth(): UseAuthReturn {
         setAuthError("Email address is not valid.");
         return;
       }
-      if (authForm.password.length < 8) {
-        setAuthError("Password must be at least 8 characters.");
-        return;
-      }
-      if (authForm.password.length > 128) {
-        setAuthError("Password must be at most 128 characters.");
-        return;
-      }
-      const hasDigit = /\d/.test(authForm.password);
-      const hasSpecial = /[^a-zA-Z0-9]/.test(authForm.password);
-      if (!hasDigit && !hasSpecial) {
-        setAuthError("Password must contain at least one digit or special character.");
-        return;
+      // Strength rules are a registration policy only. Enforcing them on login
+      // locks out legacy and OAuth accounts (password_hash = None) and turns
+      // the differing messages into a credential oracle.
+      if (authTab === "register") {
+        if (authForm.password.length < 8) {
+          setAuthError("Password must be at least 8 characters.");
+          return;
+        }
+        if (authForm.password.length > 128) {
+          setAuthError("Password must be at most 128 characters.");
+          return;
+        }
+        const hasDigit = /\d/.test(authForm.password);
+        const hasSpecial = /[^a-zA-Z0-9]/.test(authForm.password);
+        if (!hasDigit && !hasSpecial) {
+          setAuthError("Password must contain at least one digit or special character.");
+          return;
+        }
       }
 
       setAuthLoading(true);
-      const path = authTab === "login" ? "/api/v1/auth/login" : "/api/v1/auth/register";
-      const result = await authFetch(path, authForm, csrfToken);
-      setAuthLoading(false);
-      if (!result.ok) {
-        setAuthError((result.data?.error as string) || "Something went wrong. Please try again.");
-        return;
+      try {
+        const path = authTab === "login" ? "/api/v1/auth/login" : "/api/v1/auth/register";
+        const result = await authFetch(path, authForm, csrfToken);
+        if (!result.ok) {
+          setAuthError((result.data?.error as string) || "Something went wrong. Please try again.");
+          return;
+        }
+        const resultData = result.data as { user: User; access_token: string };
+        setUser(resultData.user);
+        setAccessToken(resultData.access_token);
+        setShowAuthModal(false);
+        setAuthForm({ email: "", password: "" });
+      } catch {
+        setAuthError("Could not reach the server. Check your connection and try again.");
+      } finally {
+        setAuthLoading(false);
       }
-      const resultData = result.data as { user: User; access_token: string };
-      setUser(resultData.user);
-      setAccessToken(resultData.access_token);
-      setShowAuthModal(false);
-      setAuthForm({ email: "", password: "" });
     },
     [authForm, authTab, csrfToken],
   );
