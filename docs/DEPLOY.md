@@ -68,7 +68,7 @@ Store it in an environment file (mode 600):
 sudo install -o root -g root -m 600 /dev/null /etc/ai-mentor-runner.env
 sudo tee /etc/ai-mentor-runner.env >/dev/null <<'EOF'
 EXECUTION_RUNNER_SECRET=paste-the-generated-value-here
-RUN_BIND=127.0.0.1
+RUN_BIND=0.0.0.0
 RUN_PORT=5001
 EOF
 ```
@@ -84,12 +84,17 @@ docker build -f runner/Dockerfile -t ai-mentor-runner .
 docker run -d --name ai-mentor-runner \
   --restart unless-stopped \
   --env-file /etc/ai-mentor-runner.env \
-  -p 127.0.0.1:5001:5001 \
+  -p 5001:5001 \
   ai-mentor-runner
 ```
 
-Binding to `127.0.0.1` only means the port is unreachable from the internet
-even if the firewall rule below is missing. Do not change it to `0.0.0.0`.
+> **The published port must reach the API host.** The API host calls the runner
+> over the network, so binding to `127.0.0.1` (or `--publish 127.0.0.1:5001:5001`)
+> makes the runner permanently unreachable and every request fails with
+> "The sandbox service is currently unavailable". The firewall rule in the next
+> section is what restricts who may reach it — that is the control, not the bind
+> address. Run the `curl` checks below against your runner's **public** IP, not
+> `127.0.0.1`, to prove the network path actually works.
 
 ## 5. Restrict access at the firewall
 
@@ -118,16 +123,22 @@ provider private network (Hetzner Cloud Networks, AWS VPC, GCP VPC) and keep
 ## 6. Verify before pointing production at it
 
 ```bash
+RUNNER_IP=$(curl -s ifconfig.me)   # or your Hetzner public IP
+
 # Health: does the runner see a Docker daemon?
-curl -s http://127.0.0.1:5001/healthz
+curl -s http://$RUNNER_IP:5001/healthz
 
 # Authenticated execution. Expect stdout "hi" and returncode 0.
-curl -s -X POST http://127.0.0.1:5001/execute \
+curl -s -X POST http://$RUNNER_IP:5001/execute \
   -H "Authorization: Bearer $EXECUTION_RUNNER_SECRET" \
   -H "Content-Type: application/json" \
   -d '{"code":"print(\"hi\")","language":"python",
        "image":"python:3.11-slim@sha256:b5d546c4...","cmd":["python","{source}"],"timeout":10}'
 ```
+
+Use the **public IP** here, not `127.0.0.1`. A loopback `curl` succeeds even
+when the runner is unreachable from the API host, which is the failure mode
+this whole split is most likely to hit on day one.
 
 `/healthz` must report `docker_daemon_available: true`. If it does not, the
 runner boots but every execution will fail — this is the single most likely
@@ -136,7 +147,7 @@ first-run failure.
 Confirm the unauthenticated path is actually closed:
 
 ```bash
-curl -s -o /dev/null -w "%{http_code}\n" -X POST http://127.0.0.1:5001/execute \
+curl -s -o /dev/null -w "%{http_code}\n" -X POST http://$RUNNER_IP:5001/execute \
   -d '{"code":"print(1)","language":"python","image":"python:3.11-slim","cmd":["python","{source}"]}'
 # expect 401
 ```
@@ -176,6 +187,9 @@ choice). Install Docker as in step 2, then create the service user and venv:
 
 ```bash
 sudo useradd --system --create-home --shell /usr/sbin/nologin runner
+# REQUIRED: without this the service cannot reach the Docker socket and every
+# execution fails with a permission error even though /healthz looks healthy.
+sudo usermod -aG docker runner
 sudo -u runner python3 -m venv /opt/ai-mentor/.venv
 sudo -u runner /opt/ai-mentor/.venv/bin/pip install -r runner/requirements.txt
 ```
@@ -192,7 +206,8 @@ sudo journalctl -u ai-mentor-runner -f
 
 The unit file runs gunicorn against the factory `runner.server:create_runner_app()`
 as an unprivileged `runner` user, reads its secret from the 600-mode env file,
-and binds 127.0.0.1 so step 5's firewall rule is the only thing exposing it.
+and binds `0.0.0.0` so the API host can actually reach it, with step 5's
+firewall rule as the control that restricts who may connect.
 
 Note that `ProtectSystem=strict` makes `/opt` read-only. That is why the unit
 sets `PYTHONDONTWRITEBYTECODE=1` and why user code must be written to `/tmp`
