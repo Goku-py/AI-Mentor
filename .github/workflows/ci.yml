@@ -244,10 +244,10 @@ jobs:
         run: flask db upgrade
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/test
-          FLASK_ENV: testing
+          FLASK_ENV: development
 
       - name: Verify rollback (downgrade)
         run: flask db downgrade
         env:
           DATABASE_URL: postgresql://test:test@localhost:5432/test
-          FLASK_ENV: testing
+          FLASK_ENV: development
