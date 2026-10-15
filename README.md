@@ -37,7 +37,7 @@ It's like having a tutor sitting next to you who refuses to do your homework for
 | ðŸŒ™ **Light & dark mode** | Switch themes with one click |
 | ðŸŽ¨ **Color-coded editor** | Code automatically gets colored by language so it's easier to read |
 | ðŸ” **User accounts** | Sign in with email + password to save your progress |
-| ðŸ›¡ï¸ **Safe execution** | Code runs in an isolated Docker container â€” or, where Docker is unavailable (e.g. Render's free tier), in a hardened OS-level host sandbox |
+| ðŸ›¡ï¸ **Safe execution** | Code runs in an isolated Docker container with no network, no host filesystem, and all capabilities dropped |
 
 ---
 
@@ -168,7 +168,7 @@ AI-Mentor/
 | AI server | Python + Flask |
 | AI hints | Google Gemini (via API) |
 | Database | SQLite (dev) / PostgreSQL (production) |
-| Execution | Docker container sandbox; hardened host sandbox when Docker is unavailable |
+| Execution | Docker container sandbox on a dedicated runner host (see [docs/DEPLOY.md](docs/DEPLOY.md)) |
 | Tests | pytest (Python) + Playwright (E2E) |
 
 > [!IMPORTANT]

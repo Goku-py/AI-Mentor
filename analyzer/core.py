@@ -317,6 +317,52 @@ def run_in_sandbox(
     cmd: Any,
     timeout: int = 10,
 ) -> dict[str, Any]:
+    """Execute code, delegating to the remote runner when one is configured.
+
+    The runner owns the Docker daemon so untrusted code never runs on the API host.
+    Set EXECUTION_RUNNER_URL (and EXECUTION_RUNNER_SECRET) to enable; otherwise the
+    local Docker path is used.
+    """
+    runner_url = (os.environ.get("EXECUTION_RUNNER_URL") or "").strip()
+    if runner_url:
+        return _run_via_runner(code, language, image, cmd, timeout)
+    return run_in_sandbox_local(code, language, image, cmd, timeout)
+
+
+def _run_via_runner(
+    code: str,
+    language: str,
+    image: str,
+    cmd: Any,
+    timeout: int,
+) -> dict[str, Any]:
+    runner_url = (os.environ.get("EXECUTION_RUNNER_URL") or "").rstrip("/")
+    secret = os.environ.get("EXECUTION_RUNNER_SECRET") or ""
+    try:
+        response = requests.post(
+            f"{runner_url.rstrip('/')}/execute",
+            json={"code": code, "language": language, "image": image, "cmd": cmd},
+            headers={"Authorization": f"Bearer {secret}"},
+            timeout=timeout + 15,
+        )
+        response.raise_for_status()
+        payload = response.json()
+    except Exception as err:  # noqa: BLE001
+        return _sandbox_unavailable_execution(
+            f"Execution runner unreachable: {err}",
+            "The sandbox service is currently unavailable. Please try again shortly.",
+        )
+    return {**_empty_execution(), **payload}
+
+
+def run_in_sandbox_local(
+    code: str,
+    language: str,
+    image: str,
+    cmd: Any,
+    timeout: int = 10,
+) -> dict[str, Any]:
+    """Execute code against the local Docker daemon. Used by the runner itself."""
     execution = _empty_execution()
     execution["returncode"] = -1
 
@@ -363,12 +409,10 @@ def run_in_sandbox(
                 if _host_execution_allowed():
                     host_cmd = _format_host_cmd(cmd, source_path, tmp_dir, main_class)
                     return _run_host_sandboxed(host_cmd, timeout_seconds, tmp_dir)
-                execution = _sandbox_unavailable_execution(
+                return _sandbox_unavailable_execution(
                     "Docker SDK is not installed on this server. Fallback execution is disabled.",
                     "Untrusted code execution requires a sandbox. Host fallback is disabled.",
                 )
-                run_in_sandbox.last_result = execution
-                return execution
 
             try:
                 client = docker.from_env()
@@ -376,12 +420,10 @@ def run_in_sandbox(
                 if _host_execution_allowed():
                     host_cmd = _format_host_cmd(cmd, source_path, tmp_dir, main_class)
                     return _run_host_sandboxed(host_cmd, timeout_seconds, tmp_dir)
-                execution = _sandbox_unavailable_execution(
+                return _sandbox_unavailable_execution(
                     f"Docker daemon unavailable: {docker_err}",
                     "Sandbox runtime is required for untrusted code execution.",
                 )
-                run_in_sandbox.last_result = execution
-                return execution
             container = None
             try:
                 container = client.containers.run(
@@ -508,7 +550,6 @@ def run_in_sandbox(
                 "Check whether the requested image can be pulled and started.",
             ],
         }
-        run_in_sandbox.last_result = execution
         return execution
 
 

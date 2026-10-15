@@ -1,0 +1,53 @@
+[Unit]
+Description=AI Code Mentor execution runner (Docker sandbox host)
+Documentation=https://github.com/Goku-py/AI-Mentor/blob/main/docs/DEPLOY.md
+After=network-online.target docker.service
+Requires=docker.service
+
+[Service]
+Type=exec
+User=runner
+Group=runner
+WorkingDirectory=/opt/ai-mentor
+
+# Holds EXECUTION_RUNNER_SECRET (chmod 600) plus RUN_BIND/RUN_PORT.
+# Do NOT put EXECUTION_RUNNER_URL here -- the runner executes locally.
+EnvironmentFile=/etc/ai-mentor-runner.env
+
+# ProtectSystem=strict makes /opt read-only, so don't try to write __pycache__.
+Environment=PYTHONDONTWRITEBYTECODE=1
+
+# Factory form on purpose: runner.server:create_runner_app() refuses to boot
+# when EXECUTION_RUNNER_SECRET is unset, so a missing secret is a loud startup
+# failure rather than an open remote-code-execution endpoint.
+ExecStart=/opt/ai-mentor/.venv/bin/gunicorn \
+  --bind ${RUN_BIND}:${RUN_PORT:-5001} \
+  --workers 4 \
+  --timeout 60 \
+  --access-logfile - \
+  --error-logfile - \
+  runner.server:create_runner_app()
+
+Restart=on-failure
+RestartSec=5
+TimeoutStopSec=30
+KillSignal=SIGTERM
+
+# The runner reaches the Docker socket, so it cannot be fully sandboxed by
+# systemd alone. Everything below still reduces blast radius if it is ever
+# compromised.
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictSUIDSGID=true
+LockPersonality=true
+MemoryDenyWriteExecute=false
+# Docker access needs these two; everything else stays closed.
+RestrictAddressFamilies=AF_UNIX AF_INET AF_INET6
+
+[Install]
+WantedBy=multi-user.target
