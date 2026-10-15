@@ -97,7 +97,7 @@ jobs:
           pip install pip-audit
 
       - name: pip audit
-        run: pip-audit
+        run: pip-audit -r requirements.txt
 
       - name: Pre-pull sandbox Docker images (pinned by SHA256)
         run: |
