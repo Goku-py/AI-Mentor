@@ -33,10 +33,6 @@ paths:
                 language:
                   type: string
                   default: python
-                difficulty:
-                  type: string
-                  enum: [beginner, intermediate, advanced]
-                  default: beginner
       responses:
         "200":
           description: Successful analysis

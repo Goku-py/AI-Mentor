@@ -175,38 +175,30 @@ class TestAnalyzeEndpoint:
         )
         assert response.status_code == 400
 
-    def test_analyze_requires_api_key_when_configured(self, client, monkeypatch):
-        """Analyze endpoint should require X-API-Key when ANALYZE_API_KEY is set."""
-        monkeypatch.setenv("ANALYZE_API_KEY", "test-api-key")
-        no_auth = client.post(
+    def test_analyze_allows_anonymous_callers(self, client):
+        """The X-API-Key gate was dropped: signed-out browser users can analyze."""
+        client.application.config["ANALYZE_API_KEY"] = "test-api-key"
+        response = client.post(
             "/api/v1/analyze",
             data=json.dumps({"code": 'print("hello")', "language": "python"}),
             content_type="application/json",
         )
-        assert no_auth.status_code == 401
+        assert response.status_code == 200
 
-        with_auth = client.post(
-            "/api/v1/analyze",
-            data=json.dumps({"code": 'print("hello")', "language": "python"}),
-            content_type="application/json",
-            headers={"X-API-Key": "test-api-key"},
-        )
-        assert with_auth.status_code == 200
-
-    def test_analyze_rejects_wrong_api_key_anonymous(self, client, monkeypatch):
-        """Anonymous callers with an incorrect X-API-Key still get 401."""
-        monkeypatch.setenv("ANALYZE_API_KEY", "test-api-key")
+    def test_analyze_ignores_wrong_api_key_when_anonymous(self, client):
+        """A stale/incorrect X-API-Key must not lock an anonymous caller out."""
+        client.application.config["ANALYZE_API_KEY"] = "test-api-key"
         response = client.post(
             "/api/v1/analyze",
             data=json.dumps({"code": 'print("hello")', "language": "python"}),
             content_type="application/json",
             headers={"X-API-Key": "wrong-key"},
         )
-        assert response.status_code == 401
+        assert response.status_code == 200
 
     def test_analyze_allows_authenticated_without_api_key(self, client, auth_headers, monkeypatch):
-        """A valid JWT satisfies /analyze auth even without X-API-Key."""
-        monkeypatch.setenv("ANALYZE_API_KEY", "test-api-key")
+        """A valid JWT satisfies /analyze auth without any X-API-Key."""
+        client.application.config["ANALYZE_API_KEY"] = "test-api-key"
         response = client.post(
             "/api/v1/analyze",
             data=json.dumps({"code": 'print("hello")', "language": "python"}),
@@ -219,7 +211,7 @@ class TestAnalyzeEndpoint:
         self, client, auth_headers, monkeypatch
     ):
         """Authenticated callers never need to know the server-side API key."""
-        monkeypatch.setenv("ANALYZE_API_KEY", "test-api-key")
+        client.application.config["ANALYZE_API_KEY"] = "test-api-key"
         headers = {**auth_headers, "X-API-Key": "wrong-key"}
         response = client.post(
             "/api/v1/analyze",
@@ -229,9 +221,9 @@ class TestAnalyzeEndpoint:
         )
         assert response.status_code == 200
 
-    def test_analyze_rejects_invalid_jwt_without_api_key(self, client, monkeypatch):
-        """An invalid JWT is unauthorized, with or without the API-key gate."""
-        monkeypatch.setenv("ANALYZE_API_KEY", "test-api-key")
+    def test_analyze_rejects_invalid_jwt(self, client, monkeypatch):
+        """A malformed Authorization header is still rejected, not silently downgraded."""
+        client.application.config["ANALYZE_API_KEY"] = "test-api-key"
         response = client.post(
             "/api/v1/analyze",
             data=json.dumps({"code": 'print("hello")', "language": "python"}),
@@ -348,22 +340,26 @@ class TestRootEndpoint:
     """Test root endpoint (serves the frontend SPA)."""
 
     def test_root_endpoint_exists(self, client):
-        """Root endpoint should return 200 (serves index.html or fallback)."""
+        """Root endpoint returns 200, serving the built frontend's index.html."""
         response = client.get("/")
-        # The app serves a built frontend; 200 or 404 (dist not built) are both
-        # acceptable in a test environment without a built frontend.
-        assert response.status_code in (200, 404)
+        assert response.status_code == 200
 
 
 class TestCORSHeaders:
     """Test CORS configuration."""
 
     def test_cors_headers_present(self, client):
-        """Response should include CORS headers."""
-        response = client.options("/api/v1/analyze")
-        # CORS headers should be set
-        # The actual check depends on flask-cors configuration
+        """Preflight response must echo the allowed origin and list the methods."""
+        response = client.options(
+            "/api/v1/analyze",
+            headers={
+                "Origin": "http://localhost:5173",
+                "Access-Control-Request-Method": "POST",
+            },
+        )
         assert response.status_code == 200
+        assert response.headers.get("Access-Control-Allow-Origin") == "http://localhost:5173"
+        assert "POST" in response.headers.get("Access-Control-Allow-Methods", "")
 
 
 class TestDebugSecurityEndpoints:
