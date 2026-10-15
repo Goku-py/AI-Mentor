@@ -3,14 +3,18 @@
   "buildCommand": "npm run build",
   "outputDirectory": "dist",
   "framework": "vite",
-  "rewrites": [
+  "routes": [
     {
-      "source": "/api/:path*",
-      "destination": "https://ai-mentor-fi37.onrender.com/api/:path*"
+      "handle": "filesystem"
     },
     {
-      "source": "/((?!assets/|api/).*)",
-      "destination": "/index.html"
+      "src": "/api/(.*)",
+      "dest": "${API_BACKEND_ORIGIN}/api/$1",
+      "env": ["API_BACKEND_ORIGIN"]
+    },
+    {
+      "src": "/((?!api/|.*\\.[^/]+$).*)",
+      "dest": "/index.html"
     }
   ],
   "headers": [
@@ -24,7 +28,7 @@
       ]
     },
     {
-      "source": "/(robots\\.txt|sitemap\\.xml|site\\.webmanifest|og-image\\.svg|favicon\\.svg)",
+      "source": "/(robots\\.txt|sitemap\\.xml|site\\.webmanifest|og-image\\.(svg|png)|favicon\\.svg)",
       "headers": [
         {
           "key": "Cache-Control",
@@ -33,11 +37,19 @@
       ]
     },
     {
-      "source": "/(.*)",
+      "source": "/((?!api/).*)",
       "headers": [
         { "key": "X-Content-Type-Options", "value": "nosniff" },
         { "key": "X-Frame-Options", "value": "DENY" },
-        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" }
+        { "key": "Referrer-Policy", "value": "strict-origin-when-cross-origin" },
+        {
+          "key": "Strict-Transport-Security",
+          "value": "max-age=31536000; includeSubDomains"
+        },
+        {
+          "key": "Content-Security-Policy",
+          "value": "default-src 'self'; base-uri 'self'; object-src 'none'; frame-ancestors 'none'; form-action 'self'; manifest-src 'self'; img-src 'self' data: https:; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src 'self' data: https://fonts.gstatic.com; script-src 'self'; worker-src 'self' blob:; connect-src 'self' https://ai-mentor-fi37.onrender.com; upgrade-insecure-requests"
+        }
       ]
     }
   ]

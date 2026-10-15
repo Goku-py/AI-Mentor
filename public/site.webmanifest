@@ -1,0 +1,20 @@
+{
+  "name": "AI Code Mentor",
+  "short_name": "Code Mentor",
+  "description": "Run Python, JavaScript, Java, C & C++ in browser with AI mentor feedback.",
+  "lang": "en",
+  "dir": "ltr",
+  "scope": "/",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0d1117",
+  "theme_color": "#0d1117",
+  "icons": [
+    {
+      "src": "/favicon.svg",
+      "sizes": "any",
+      "type": "image/svg+xml",
+      "purpose": "any"
+    }
+  ]
+}
